@@ -92,9 +92,11 @@ def main() -> None:
     closure_uids = run_dbt_ls()
     modified_uids = run_dbt_ls_modified()
 
-    current_manifest = _read_json("target/manifest.json")
-    if current_manifest is None and not greenfield:
-        sys.exit("Missing artifact: target/manifest.json — re-run `dbt compile` or push a new commit.")
+    proj = os.environ.get("PROJ", ".")
+    manifest_path = f"{proj}/target/manifest.json"
+    current_manifest = _read_json(manifest_path)
+    if current_manifest is None:
+        sys.exit(f"Missing artifact: {manifest_path} — re-run `dbt compile` or push a new commit.")
     current_manifest = current_manifest or {}
     current_nodes = current_manifest.get("nodes", {})
     project_name: str = current_manifest.get("metadata", {}).get("project_name", "")

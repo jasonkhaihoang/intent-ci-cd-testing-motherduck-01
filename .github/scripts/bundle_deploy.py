@@ -79,6 +79,14 @@ def _existing_destinations(bundle: dict, target_root: str) -> set[str]:
     }
 
 
+def _apply_copy(source: str, destination: str) -> None:
+    """Copy source to destination, preserving source's permission bits
+    (shutil.copy, not shutil.copyfile — a bundle-owned hook file must land
+    executable, and copyfile drops the mode bits)."""
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    shutil.copy(source, destination)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", required=True, choices=sorted(_BUNDLE_DIRS))
@@ -98,8 +106,7 @@ def main(argv: list[str]) -> int:
     for plan in plans:
         print(f"{'[dry-run] ' if args.dry_run else ''}{plan['mode']}: {plan['destination']}")
         if not args.dry_run:
-            os.makedirs(os.path.dirname(plan["destination"]), exist_ok=True)
-            shutil.copyfile(plan["source"], plan["destination"])
+            _apply_copy(plan["source"], plan["destination"])
 
     print(f"{len(plans)} file(s) {'planned' if args.dry_run else 'deployed'} to {args.target}")
     return 0
