@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: >
+      Staging model for customers. One row per customer, keyed by id.
+      Casts signup_date to DATE and uppercases country.
+    columns:
+      - name: id
+        description: Unique customer identifier.
+        tests:
+          - not_null
+          - unique
+      - name: name
+        description: Customer full name.
+      - name: signup_date
+        description: Date the customer signed up, cast to DATE.
+      - name: country
+        description: Customer country, uppercased.

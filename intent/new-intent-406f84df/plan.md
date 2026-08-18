@@ -62,29 +62,29 @@ git commit -m "feat: add raw_customers seed"
 - Consumes: `raw_customers` seed (from Task 1) via `{{ ref('raw_customers') }}`.
 - Produces: `stg_customers` staging view (columns `id`, `name`, `signup_date` DATE, `country` UPPERCASED) and its `schema.yml` tests.
 
-- [ ] **Step 1: Author the model SQL and schema YAML**
+- [x] **Step 1: Author the model SQL and schema YAML**
 
 Write `transformation/models/staging/stg_customers.sql` selecting `id`, `name`, `cast(signup_date as date) as signup_date`, `upper(country) as country` from `{{ ref('raw_customers') }}` (explicit column list, no `SELECT *`). Write `transformation/models/staging/schema.yml` declaring model `stg_customers` with `not_null` and `unique` tests on column `id`.
 
-- [ ] **Step 2: Compile check (generating-dbt-model gate)**
+- [x] **Step 2: Compile check (generating-dbt-model gate)**
 
 Run: `cd /workspace/transformation && dbt compile --select stg_customers`
 
 Expected: exit 0; the model compiles with no column-resolution or contract errors.
 
-- [ ] **Step 3: Sandbox build (running-dbt-in-sandbox gate)**
+- [x] **Step 3: Sandbox build (running-dbt-in-sandbox gate)**
 
 Run: `cd /workspace/transformation && dbt build --select stg_customers --target dev && python /data/default-plugins/vibedata-data-engineering/0.45.2/scripts/ephemeral_workspace_marker.py init`
 
 Expected: exit 0; dbt reports the `stg_customers` view created and its `not_null`/`unique` tests passed.
 
-- [ ] **Step 4: Test gate (dbt-unit-testing)**
+- [x] **Step 4: Test gate (dbt-unit-testing)**
 
 Run: `cd /workspace/transformation && dbt test --select stg_customers`
 
 Expected: exit 0; `not_null_stg_customers_id` and `unique_stg_customers_id` both pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add transformation/models/staging/stg_customers.sql transformation/models/staging/schema.yml
@@ -94,3 +94,4 @@ git commit -m "feat: add stg_customers staging model and tests"
 ## Execution evidence
 
 - [x] Task 1: `dbt seed --select raw_customers --target dev` — exit 0 — `transformation/seeds/raw_customers.csv` — sha256:f3532495c8cef50362902fd51d1039d979a0cd1fa65334d5fbd77b978faf9d05 (8 rows loaded; 8 distinct, 8 non-null ids)
+- [x] Task 2: `dbt test --select stg_customers` — exit 0 — `transformation/models/staging/stg_customers.sql` (sha256:824ff5c71319a3a2dc1e12e73d6051a1d40270156bb82a6556b07c40c449e297) + `schema.yml` (sha256:c597a3c5711cec7192aaec273c753d1499aee01957eb3e49556c818c9d59f561) — compile exit 0, `dbt build --select stg_customers --target dev` exit 0 (view created), `not_null`+`unique` on `id` PASS; 8 rows, `signup_date` DATE, `country` uppercased
