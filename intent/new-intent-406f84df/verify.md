@@ -25,6 +25,7 @@ certified — all six Coverage rows are covered by green deterministic gates (`d
 | Clean-diff gate | `git push -u origin HEAD` | 0 | pass — "Everything up-to-date"; no build artifacts on the branch |
 | Contract publishing (`publishing-dbt-contracts`) | (not called — staging model, no enforced contract) | n/a | n/a |
 | Model documentation (`documenting-dbt-models`) | (already satisfied — `schema.yml` carries model + column descriptions) | n/a | n/a |
+| PR open | `gh pr create --base main --head intent/new-intent-406f84df` | 0 | pass — https://github.com/jasonkhaihoang/intent-ci-cd-testing-motherduck-01/pull/1 |
 
 ## Reviewer verdicts
 
@@ -59,3 +60,5 @@ certified — all six Coverage rows are covered by green deterministic gates (`d
 The code-reviewer's info note on SQL indentation was resolved: `stg_customers.sql` was re-indented to 2 spaces and the model re-built (`dbt build` exit 0, tests PASS).
 
 ## Approvals
+
+- [x] User approved ship — 2026-08-18 11:49 (UTC)
