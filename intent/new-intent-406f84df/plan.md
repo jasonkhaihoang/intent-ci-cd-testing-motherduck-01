@@ -33,17 +33,17 @@
 - Consumes: nothing.
 - Produces: `raw_customers` seed relation (columns `id` INTEGER, `name` VARCHAR, `signup_date` DATE/VARCHAR, `country` VARCHAR) in the sandbox — later consumed by `stg_customers` via `{{ ref('raw_customers') }}`.
 
-- [ ] **Step 1: Author the seed CSV**
+- [x] **Step 1: Author the seed CSV**
 
 Write `transformation/seeds/raw_customers.csv` with a header row `id,name,signup_date,country` and 5–10 data rows: integer `id` (1..N, unique, non-null), a non-empty `name`, `signup_date` as `YYYY-MM-DD`, and lowercase `country`.
 
-- [ ] **Step 2: Load the seed into the sandbox**
+- [x] **Step 2: Load the seed into the sandbox**
 
 Run: `cd /workspace/transformation && dbt seed --select raw_customers --target dev && python /data/default-plugins/vibedata-data-engineering/0.45.2/scripts/ephemeral_workspace_marker.py init`
 
 Expected: exit 0; dbt reports `raw_customers` seeded with the authored row count.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add transformation/seeds/raw_customers.csv
@@ -92,3 +92,5 @@ git commit -m "feat: add stg_customers staging model and tests"
 ```
 
 ## Execution evidence
+
+- [x] Task 1: `dbt seed --select raw_customers --target dev` — exit 0 — `transformation/seeds/raw_customers.csv` — sha256:f3532495c8cef50362902fd51d1039d979a0cd1fa65334d5fbd77b978faf9d05 (8 rows loaded; 8 distinct, 8 non-null ids)
