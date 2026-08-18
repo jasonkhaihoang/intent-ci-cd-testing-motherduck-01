@@ -2,17 +2,26 @@
 
 ## Certification
 
-Placeholder.
+certified — all six Coverage rows are covered by green deterministic gates (`dbt build` and `dbt test` exit 0, project audit `ERROR=0`, dev-artifact scan clean) and the code-reviewer returned APPROVE; propose shipping.
 
 ## Coverage
 
 | Source | Item | Covered by | Evidence |
 | --- | --- | --- | --- |
+| intent.md success criteria | `dbt build` exits 0 (seed loads, model compiles + materializes, tests pass) | Sandbox build gate | `dbt build --select stg_customers --target dev` — exit 0 |
+| intent.md success criteria | `raw_customers` holds 5–10 rows; `stg_customers` one row per customer (same count) | Read-only lakehouse query | 8 rows in both `raw_customers` and `stg_customers` |
+| intent.md success criteria | `signup_date` is DATE, `country` is uppercase | lakehouse_schema + query | `signup_date` DATE; `country` e.g. `UNITED STATES` |
+| intent.md success criteria | `not_null(id)` and `unique(id)` pass | dbt test gate | `dbt test --select stg_customers` — exit 0 (both PASS) |
+| intent.md success criteria | Verification returns row count + sample output | Read-only lakehouse query | 8-row sample of `stg_customers` returned |
+| design.md Model Inventory | `stg_customers` staging view, grain keyed by `id` | compile + build gates | `dbt compile --select stg_customers` exit 0; view created |
 
 ## Gate results
 
 | Gate | Command | Exit code | Outcome |
 | --- | --- | --- | --- |
+| Golden replay | (no baseline named in `design.md`) | n/a | skipped |
+| Project audit | `dbt run --select package:dbt_project_evaluator` then `dbt test --select package:dbt_project_evaluator` | 0 | pass — `ERROR=0`; 8 warnings all from `elementary` package models, none from `stg_customers` |
+| Dev-artifact scan | `grep -rnE 'dev_mode\|add_limit\|--target prod' models/ seeds/` | 0 | pass — no hits |
 
 ## Reviewer verdicts
 
@@ -24,5 +33,26 @@ Placeholder.
   "next_step": "Proceed past the design stop and dispatch planning."
 }
 ```
+
+```json
+{
+  "verdict": "APPROVE",
+  "summary": "stg_customers is a correct 1:1 seed→staging transform. Grain (one row per customer, keyed by id) is preserved and documented in both the SQL header comment and the schema.yml description. The model uses an explicit column list (no SELECT *), CAST(signup_date AS DATE) and UPPER(country) with no joins, no branching, and no business logic. Tier-1 not_null + unique on the grain column id is present and structural (not a mirror of the SQL). No enforced contract, no runtime-audit control columns, and no unit tests are required for a staging view with a pure cast/rename transform, so their absence is correct. ref('raw_customers') is the correct reference for a project-owned dbt seed (source() is inapplicable absent a source system, per design.md and ADR-0001). The seed's 8 rows have unique, non-null integer ids and lowercase ISO-signup dates, so the declared uniqueness/not-null contract holds. sha256 hashes of all three changed artifacts match the plan.md Execution evidence.",
+  "issues": [
+    {
+      "severity": "info",
+      "message": "Column list is indented 4 spaces; the SQL style guide specifies 2 spaces per level. Cosmetic only, does not affect correctness.",
+      "location": "transformation/models/staging/stg_customers.sql"
+    },
+    {
+      "severity": "info",
+      "message": "Only the grain column id carries not_null/unique. The dbt pattern 'always-test-the-pk-at-least-one-non-null-business-column' is a should-do (not a Tier-1 must) and is optional here; a not_null on name would be advisory only and is not required for a seed-fed staging demo.",
+      "location": "transformation/models/staging/schema.yml"
+    }
+  ]
+}
+```
+
+The code-reviewer's info note on SQL indentation was resolved: `stg_customers.sql` was re-indented to 2 spaces and the model re-built (`dbt build` exit 0, tests PASS).
 
 ## Approvals
