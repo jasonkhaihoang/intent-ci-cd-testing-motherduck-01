@@ -1,0 +1,1697 @@
+# MotherDuck CI — Gates 0, 1, design-drift, 2, 4 (static-check + state-modified+ + design-drift + ci/run + ci/data-tests).
+# Gate 3 (ci/unit-tests) is wired in VD-2162.
+# See docs/design/MotherDuck/motherduck-ci-workflow-design.md
+name: CI (MotherDuck)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  SCRIPTS: .github/scripts
+  # Shared dbt ls / emit_deployment_manifest read these to select the compile profile.
+  DBT_COMPILE_PROFILE: dbt_motherduck_compile
+  DBT_COMPILE_TARGET: compile
+
+jobs:
+  # ─── PREFLIGHT ────────────────────────────────────────────────────────────────
+  preflight:
+    name: "ci/preflight: intent + config"
+    runs-on: ubuntu-latest
+    outputs:
+      domain: ${{ steps.preflight.outputs.domain }}
+      intent_slug: ${{ steps.preflight.outputs.intent_slug }}
+      motherduck_token_var: ${{ steps.preflight.outputs.MOTHERDUCK_TOKEN_VAR }}
+      llm_api_key_var: ${{ steps.preflight.outputs.LLM_API_KEY_VAR }}
+      llm_api_url_var: ${{ steps.preflight.outputs.LLM_API_URL_VAR }}
+      llm_model_var: ${{ steps.preflight.outputs.LLM_MODEL_VAR }}
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Emit ci/preflight pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "pending",
+              "Preflight: validating intent + config",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Check branch sync
+        id: sync
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BEHIND=$(gh api \
+            "repos/${{ github.repository }}/compare/main...${{ github.event.pull_request.head.sha }}" \
+            --jq '.behind_by' 2>/dev/null || echo "0")
+          echo "behind_by=${BEHIND}" >> "$GITHUB_OUTPUT"
+
+          CONFLICT_FILES=""
+          if [ "${BEHIND:-0}" -gt 0 ] 2>/dev/null; then
+            git fetch origin main --quiet || true
+            MERGE_OUT=$(git merge-tree HEAD origin/main 2>&1) || true
+            CONFLICT_FILES=$(echo "${MERGE_OUT}" | awk '/^CONFLICT \(content\): Merge conflict in /{printf "%s%s",(NR==1?"":","),($(NF))}')
+          fi
+          echo "conflict_files=${CONFLICT_FILES}" >> "$GITHUB_OUTPUT"
+
+      - name: Run preflight checks
+        id: preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/preflight.py \
+            --branch-name "${{ github.head_ref }}" \
+            --behind-by "${{ steps.sync.outputs.behind_by || '0' }}" \
+            --conflict-files "${{ steps.sync.outputs.conflict_files }}" \
+            --ci-config-path "$CICFG" \
+            --output reports/preflight.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Post preflight comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render, pr_comment
+          try:
+              with open("reports/preflight.json") as f:
+                  result = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              result = None
+          body = notify_render.render_preflight_comment(result)
+          pr_comment.upsert("<!-- ci-preflight -->", body, os.environ["PR_NUMBER"], os.environ["GITHUB_REPOSITORY"])
+          EOF
+
+      - name: Emit ci/preflight success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "success",
+              "Preflight passed",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Emit ci/preflight failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "failure",
+              "Preflight failed — see PR comment",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── ADR NUMBERING ────────────────────────────────────────────────────────
+  # Standalone check: fails the PR if docs/adr/ has duplicate leading numbers, or
+  # any ADR-00NN citation under docs/** has no matching file. No `needs:` — this
+  # check is independent of preflight and every other gate.
+  adr-numbering:
+    name: "ci/adr-numbering: ADR number + reference check"
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Emit ci/adr-numbering pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "pending",
+              "Checking ADR numbering + cross-references",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Run ADR numbering check
+        run: python3 ${{ env.SCRIPTS }}/adr_lint.py
+
+      - name: Emit ci/adr-numbering success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "success",
+              "No duplicate ADR numbers or dangling references",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Emit ci/adr-numbering failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "failure",
+              "ADR numbering check failed — see job log",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── STATIC ANALYSIS ──────────────────────────────────────────────────────────
+  # Gate 0: ruff + sqlfluff + gitleaks + dbt compile + scorecard + schema gate.
+  # dbt compile uses dbt_motherduck_compile (offline, in-memory DuckDB, database: prd).
+  static-analysis:
+    name: "ci/static-check: static analysis"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install analysis tools
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install ruff sqlfluff pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+          case "$(uname -m)" in
+            arm64|aarch64) GITLEAKS_ARCH=linux_arm64 ;;
+            *)              GITLEAKS_ARCH=linux_x64 ;;
+          esac
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_${GITLEAKS_ARCH}.tar.gz" \
+            | tar xz -C /usr/local/bin gitleaks
+
+      - run: mkdir -p reports
+
+      - name: Emit Gate 0 pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/static-check",
+              "pending",
+              "Gate 0: static analysis running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: ruff
+        continue-on-error: true
+        run: ruff check . --exclude .github --output-format json > reports/ruff.json 2>/dev/null
+
+      - name: sqlfluff
+        continue-on-error: true
+        run: sqlfluff lint "$PROJ/models" --dialect duckdb --format json > reports/sqlfluff.json 2>/dev/null
+
+      - name: gitleaks
+        continue-on-error: true
+        run: |
+          gitleaks detect --source . \
+            --report-format json \
+            --report-path reports/gitleaks.json \
+            --no-banner 2>/dev/null
+          [ -f reports/gitleaks.json ] || echo '[]' > reports/gitleaks.json
+
+      - name: dbt scorecard
+        continue-on-error: true
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet 2>/dev/null || true
+          dbt compile \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --exclude package:elementary --quiet 2>/dev/null || true
+          python3 ${{ env.SCRIPTS }}/scorecard.py \
+            --manifest "$PROJ/target/manifest.json" \
+            --agents-md AGENTS.md \
+            > reports/scorecard.json
+
+      - name: dbt compile
+        continue-on-error: true
+        run: |
+          python3 ${{ env.SCRIPTS }}/dbt_error_report.py reports/dbt_compile.json \
+            compile \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --exclude package:elementary || true
+
+      - name: Schema gate
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/schema_gate.py \
+            --manifest "$PROJ/target/manifest.json" \
+            --repo "${{ github.repository }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --output reports/schema_gate.json || true
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-reports-pr${{ github.event.pull_request.number }}
+          path: reports/
+          retention-days: 30
+
+      - name: Post gate-0 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          from notify_render import render_gate_0_comment
+          import pr_comment
+
+          def load(path):
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except (OSError, json.JSONDecodeError):
+                  return None
+
+          compile_result = load("reports/dbt_compile.json")
+          schema_gate    = load("reports/schema_gate.json")
+          ruff           = load("reports/ruff.json")
+          sqlfluff       = load("reports/sqlfluff.json")
+          gitleaks       = load("reports/gitleaks.json")
+          scorecard      = load("reports/scorecard.json")
+
+          body = render_gate_0_comment(
+              compile_result, schema_gate,
+              ruff=ruff, sqlfluff=sqlfluff, gitleaks=gitleaks,
+              scorecard=scorecard,
+              run_url=os.environ.get("RUN_URL", ""),
+          )
+          pr_comment.upsert(
+              marker="<!-- ci-static-check -->",
+              body=body,
+              pr_number=os.environ["PR_NUMBER"],
+              repo=os.environ["GITHUB_REPOSITORY"],
+          )
+          PYEOF
+
+      - name: Gate 0 evaluate
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          def load(path):
+              if not os.path.exists(path):
+                  return None
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except (json.JSONDecodeError, OSError):
+                  return None
+
+          def ruff_ok(r):
+              return isinstance(r, list) and len(r) == 0
+
+          def sqlfluff_ok(r):
+              files = r if isinstance(r, list) else (r.get("files", []) if isinstance(r, dict) else [])
+              return all(not f.get("violations") for f in files)
+
+          def gitleaks_ok(r):
+              findings = r if isinstance(r, list) else (r.get("findings", []) if isinstance(r, dict) else [])
+              return len(findings) == 0
+
+          def passed_field_ok(r):
+              return isinstance(r, dict) and bool(r.get("passed"))
+
+          checks = [
+              ("ruff",          ruff_ok,         "reports/ruff.json"),
+              ("sqlfluff",      sqlfluff_ok,     "reports/sqlfluff.json"),
+              ("gitleaks",      gitleaks_ok,     "reports/gitleaks.json"),
+              ("dbt compile",   passed_field_ok, "reports/dbt_compile.json"),
+              ("schema gate",   passed_field_ok, "reports/schema_gate.json"),
+              ("dbt scorecard", passed_field_ok, "reports/scorecard.json"),
+          ]
+
+          failures = []
+          for name, check, path in checks:
+              report = load(path)
+              if report is None:
+                  failures.append(f"{name} (report missing)")
+              elif not check(report):
+                  failures.append(name)
+
+          if failures:
+              print(f"::error::Gate 0 failed: {', '.join(failures)}", file=sys.stderr)
+              sys.exit(1)
+          print("Gate 0: all blocking checks passed.")
+          PYEOF
+
+      - name: Emit Gate 0 final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              state, desc = "success", "Gate 0: all checks passed"
+          else:
+              state, desc = "failure", "Gate 0: one or more checks failed"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/static-check",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  # ─── FETCH PROD STATE ─────────────────────────────────────────────────────────
+  # Gate 1: download prod-manifest-motherduck → dbt ls --state → emit deployment manifest.
+  # dbt_motherduck_compile is offline; no MotherDuck live connection required here.
+  fetch-prod-state:
+    name: "ci/state-modified+: fetch prod state"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    outputs:
+      greenfield_fallback: ${{ steps.fetch.outputs.greenfield_fallback }}
+      platform_error_mode: ${{ steps.fetch.outputs.mode }}
+      platform_error_category: ${{ steps.fetch.outputs.category }}
+      platform_error_reason: ${{ steps.fetch.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Emit Gate 1 pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/state-modified+",
+              "pending",
+              "Gate 1: fetching prod state",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Fetch prod state
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: python3 ${{ env.SCRIPTS }}/fetch_prod_state.py
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --quiet
+
+      - name: Emit deployment manifest
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/emit_deployment_manifest.py
+
+      - name: Show modified set
+        if: always() && steps.fetch.outputs.greenfield_fallback != 'true' && hashFiles('prod-state/manifest.json') != ''
+        run: |
+          modified=$(dbt ls \
+                       --project-dir "$PROJ" \
+                       --select state:modified+ \
+                       --state prod-state \
+                       --profiles-dir .github/profiles \
+                       --profile dbt_motherduck_compile \
+                       --target compile \
+                       --output name 2>/dev/null | grep -v '^\(Running\|Found\|Update\)' || true)
+          echo "::group::state:modified+ closure"
+          if [ -z "$modified" ]; then
+            echo "::notice title=state:modified+::(empty — no models changed vs prod baseline)"
+          else
+            while IFS= read -r m; do
+              [ -n "$m" ] && echo "::notice title=state:modified+::state:modified+ => $m"
+            done <<< "$modified"
+          fi
+          echo "::endgroup::"
+
+      - name: Upload prod-state artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-state-pr${{ github.event.pull_request.number }}
+          path: prod-state/
+          retention-days: 7
+
+      - name: Upload deployment manifest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Post gate-1 comment
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GREENFIELD_FALLBACK: ${{ steps.fetch.outputs.greenfield_fallback }}
+          PLATFORM_ERROR_MODE: ${{ steps.fetch.outputs.mode }}
+          PLATFORM_ERROR_CATEGORY: ${{ steps.fetch.outputs.category }}
+          PLATFORM_ERROR_REASON: ${{ steps.fetch.outputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render, pr_comment
+          greenfield = os.environ.get("GREENFIELD_FALLBACK", "false").lower() == "true"
+          passed = os.environ.get("JOB_STATUS", "failure").lower() == "success"
+          category = os.environ.get("PLATFORM_ERROR_CATEGORY", "")
+          platform_error = None
+          if category:
+              platform_error = {
+                  "mode": os.environ.get("PLATFORM_ERROR_MODE", "artifact"),
+                  "category": category,
+                  "reason": os.environ.get("PLATFORM_ERROR_REASON", ""),
+              }
+          head_sha = os.environ.get("HEAD_SHA", "")
+          closure = []
+          try:
+              manifest_path = f"reports/deployment-manifest-{head_sha}.json"
+              with open(manifest_path) as f:
+                  dm = json.load(f)
+              for a in dm.get("artifacts", []):
+                  closure.append({
+                      "name": a.get("name", "").split(".")[-1],
+                      "materialization": a.get("materialized", "unknown"),
+                      "closure_source": a.get("closure_source", "descendant"),
+                  })
+          except (FileNotFoundError, json.JSONDecodeError):
+              closure = []
+          body = notify_render.render_gate_1_comment(
+              closure,
+              greenfield=greenfield,
+              passed=passed,
+              platform_error=platform_error,
+          )
+          pr_comment.upsert(notify_render.GATE_1_MARKER, body, os.environ["PR_NUMBER"], os.environ["REPO"])
+          EOF
+
+      - name: Emit Gate 1 final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              state, desc = "success", "Gate 1: prod state resolved"
+          else:
+              state, desc = "failure", f"Gate 1: failed — see {run_url}"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/state-modified+",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  # ─── DESIGN-DRIFT ─────────────────────────────────────────────────────────────
+  # LLM-based gate: compares design.md against the state:modified closure.
+  # Runs after Gate 1; Gate 2 only starts once this passes.
+  design-drift:
+    name: "ci/design-drift: design.md vs state:modified"
+    needs: [preflight, fetch-prod-state]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Emit ci/design-drift pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/design-drift",
+              "pending",
+              "Gate: design-drift running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Write modified.json from deployment manifest
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          head_sha = os.environ["HEAD_SHA"]
+          with open(f"reports/deployment-manifest-{head_sha}.json") as f:
+              dm = json.load(f)
+          names = [a["name"].split(".")[-1] for a in dm.get("artifacts", [])]
+          with open("reports/modified.json", "w") as f:
+              json.dump(names, f)
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --quiet
+
+      - name: Run design-drift gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          LLM_API_KEY: ${{ secrets[needs.preflight.outputs.llm_api_key_var] }}
+          LLM_API_URL: ${{ vars[needs.preflight.outputs.llm_api_url_var] }}
+          LLM_MODEL: ${{ vars[needs.preflight.outputs.llm_model_var] }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/design_drift_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json" \
+            --modified   "reports/modified.json"
+
+      - name: Emit ci/design-drift final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/design-drift",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── GATE 2 — CI/RUN ──────────────────────────────────────────────────────────
+  # Clones prd → pr_<N>_<sha>, runs dbt.
+  # Reads model names from the deployment-manifest artifact emitted by Gate 1.
+  # ─── ORCHESTRATION ──────────────────────────────────────────────────────────
+  # Validates the optional `## Schedule` design-contract section in intent/<slug>/design.md.
+  # Platform-neutral: cron/DAG/selector resolution only — does not deploy schedules.
+  orchestration:
+    name: "ci/orchestration: schedule design contract"
+    needs: [preflight, design-drift]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Emit ci/orchestration pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/orchestration",
+              "pending",
+              "Gate: orchestration running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --quiet
+
+      - name: Run orchestration gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/orchestration_gate_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json"
+
+      - name: Emit ci/orchestration final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/orchestration",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── SEMANTIC-MODEL ───────────────────────────────────────────────────────────
+  # Validates the optional `## Semantic Model` design-contract section against the dbt
+  # MetricFlow objects in manifest.json. Static only — no live MetricFlow query runtime check.
+  semantic-model:
+    name: "ci/semantic-model: dbt MetricFlow design contract"
+    needs: [preflight, design-drift]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Emit ci/semantic-model pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/semantic-model",
+              "pending",
+              "Gate: semantic-model running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles \
+            --profile dbt_motherduck_compile \
+            --target compile \
+            --quiet
+
+      - name: Run semantic-model gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/semantic_model_gate_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json"
+
+      - name: Emit ci/semantic-model final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/semantic-model",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  gate-2-run:
+    name: "ci/run: MotherDuck dbt build"
+    needs: [preflight, fetch-prod-state, design-drift, orchestration, semantic-model]
+    runs-on: ubuntu-latest
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets[needs.preflight.outputs.motherduck_token_var] }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Emit ci/run pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/run",
+              "pending",
+              "Gate 2: cloning prd and running dbt",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Clone prd → per-PR MotherDuck database
+        id: clone-db
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA_SHORT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, shutil, sys
+          sys.path.insert(0, ".github/scripts")
+          import ci_database, runner_io
+
+          pr_number = int(os.environ["PR_NUMBER"])
+          head_sha_short = os.environ["HEAD_SHA_SHORT"][:7]
+          prod_db_name = "prd"
+
+          db_name = ci_database.derive_ci_database_name(pr_number, head_sha_short)
+
+          fake_dir = os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR")
+          if fake_dir:
+              # ADR 0016: no HTTP boundary exists to front MotherDuck's md:
+              # wire protocol, so a real zero-copy clone is approximated with
+              # a plain file copy under the fake-world harness only.
+              shutil.copyfile(
+                  os.path.join(fake_dir, f"{prod_db_name}.duckdb"),
+                  os.path.join(fake_dir, f"{db_name}.duckdb"),
+              )
+          else:
+              token = os.environ["MOTHERDUCK_TOKEN"]
+              sql = ci_database.create_database_from_prod_sql(db_name, prod_db_name)
+
+              import duckdb
+              con = duckdb.connect(f"md:?motherduck_token={token}")
+              try:
+                  con.execute(sql)
+              except Exception as e:
+                  if "retention" in str(e).lower():
+                      # Free-plan: prd has >0 snapshot retention which the plan can't inherit.
+                      # Reset prd to 0-day retention and retry. No-op on paid plans (CREATE
+                      # succeeds on the first try and this block is never reached).
+                      con.execute(ci_database.clear_db_retention_sql(prod_db_name))
+                      con.execute(sql)
+                  else:
+                      raise
+              con.close()
+
+          runner_io.set_output("db_name", db_name)
+          runner_io.set_output("head_sha_short", head_sha_short)
+          print(f"Created MotherDuck database: {db_name}")
+          EOF
+
+      - name: Drop stale per-SHA databases for this PR
+        if: steps.clone-db.outcome == 'success'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DB_NAME: ${{ steps.clone-db.outputs.db_name }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+
+          if os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR"):
+              # ADR 0016: incidental cleanup, not part of AC-24 or the
+              # build-failure path — a fresh fake-world scratch dir never has
+              # stale databases to drop.
+              print("Skipping stale-database cleanup under the fake-world harness")
+              sys.exit(0)
+
+          sys.path.insert(0, ".github/scripts")
+          import ci_database, duckdb
+
+          pr_number = int(os.environ["PR_NUMBER"])
+          current_db_name = os.environ["DB_NAME"]
+          token = os.environ["MOTHERDUCK_TOKEN"]
+
+          con = duckdb.connect(f"md:?motherduck_token={token}")
+          rows = con.execute("SHOW DATABASES;").fetchall()
+          all_db_names = [r[0] for r in rows]
+          stale = ci_database.stale_pr_databases(all_db_names, pr_number=pr_number, current_db_name=current_db_name)
+          print(f"Stale databases to drop: {stale}", flush=True)
+          for name in stale:
+              # VD-3477: share must drop before its database — MotherDuck refuses
+              # DROP DATABASE while a share still references it.
+              share_sql = ci_database.drop_share_sql(name)
+              print(f"  -> {share_sql}", flush=True)
+              try:
+                  con.execute(share_sql)
+              except Exception as exc:
+                  print(f"     WARNING: DROP SHARE failed (best-effort) — {exc}", file=sys.stderr, flush=True)
+
+              sql = ci_database.drop_database_sql(name)
+              print(f"  -> {sql}", flush=True)
+              try:
+                  con.execute(sql)
+              except Exception as exc:
+                  print(f"     WARNING: DROP failed (best-effort) — {exc}", file=sys.stderr, flush=True)
+          con.close()
+          EOF
+
+      - name: dbt run — build closure against per-PR clone
+        id: dbt-run
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA_SHORT: ${{ steps.clone-db.outputs.head_sha_short }}
+          MOTHERDUCK_TOKEN: ${{ env.MOTHERDUCK_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p reports
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+
+          with open(f"reports/deployment-manifest-{os.environ['HEAD_SHA']}.json") as f:
+              dm = json.load(f)
+          names = [a['name'].split('.')[-1] for a in dm.get("artifacts", [])]
+          if not names:
+              print("No artifacts in deployment manifest — skipping dbt run")
+              with open("reports/gate2_select.txt", "w"):
+                  pass
+          else:
+              select_arg = " ".join(names)
+              print(f"Selecting models: {select_arg}")
+              with open("reports/gate2_select.txt", "w") as f:
+                  f.write(select_arg)
+          EOF
+
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_ci --quiet
+
+          SELECT=$(cat reports/gate2_select.txt)
+          if [ -n "$SELECT" ]; then
+            # `|| true` deliberately swallows dbt's own exit code so the "Assemble
+            # gate-2 result" step below still runs and reads run_results.json even
+            # when dbt errors — that's what lets the PR comment show the actual
+            # per-model failure. The real pass/fail signal comes from
+            # gate_2_result.assemble's overall_status, not this step's exit code.
+            dbt run \
+              --project-dir "$PROJ" \
+              --select $SELECT \
+              --profiles-dir .github/profiles \
+              --profile dbt_motherduck_ci \
+              --target ci \
+              --no-use-colors 2>&1 || true
+          else
+            echo "No models to build — gate-2 passes with empty artifact list"
+          fi
+
+      - name: Assemble gate-2 result and save report
+        id: assemble
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DB_CREATED: ${{ steps.clone-db.outcome == 'success' && 'true' || 'false' }}
+          DB_NAME: ${{ steps.clone-db.outputs.db_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA_SHORT: ${{ steps.clone-db.outputs.head_sha_short }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import ci_database, gate_2_result
+
+          head_sha = os.environ["HEAD_SHA"]
+          db_created = os.environ.get("DB_CREATED", "false").lower() == "true"
+          db_name = os.environ.get("DB_NAME", "")
+
+          run_results = None
+          try:
+              with open(f"{os.environ.get('PROJ', '.')}/target/run_results.json") as f:
+                  run_results = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          # VD-3322: run_results is None both when no models were selected (legitimate
+          # pass) and when dbt crashed before writing run_results.json at all (compile
+          # error, profile misconfiguration — distinct from a per-model dbt ERROR status,
+          # which does produce run_results.json). Tell them apart via gate2_select.txt,
+          # already written by the dbt-run step above: non-empty means models WERE
+          # selected, so a missing run_results.json means the build crashed.
+          build_crash_error = None
+          if run_results is None:
+              try:
+                  with open("reports/gate2_select.txt") as f:
+                      select_content = f.read().strip()
+              except OSError:
+                  select_content = ""
+              if select_content:
+                  build_crash_error = (
+                      "dbt run did not produce run_results.json — the build likely "
+                      "crashed before completing (compile error, profile "
+                      "misconfiguration, etc.)"
+                  )
+
+          manifest_materializations = {}
+          try:
+              with open(f"reports/deployment-manifest-{head_sha}.json") as _mf:
+                  _dm = json.load(_mf)
+              for _a in _dm.get("artifacts", []):
+                  _name = _a.get("name", "").split(".")[-1]
+                  if _name and _a.get("materialized"):
+                      manifest_materializations[_name] = _a["materialized"]
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          # AC-10: create the Dive when the DB was created and models were built
+          dive_url = None
+          share_creation_failed = False
+          model_schemas = ci_database.extract_model_schemas(run_results)
+          if db_created and db_name and model_schemas:
+              try:
+                  import duckdb, urllib.parse
+                  fake_dir = os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR")
+                  if fake_dir:
+                      con = duckdb.connect(os.path.join(fake_dir, f"{db_name}.duckdb"))
+                  else:
+                      token = os.environ["MOTHERDUCK_TOKEN"]
+                      con = duckdb.connect(f"md:{db_name}?motherduck_token={token}")
+
+                  # AC-10 extension (VD-3321): org-scoped read-only share so a PR author who
+                  # isn't the owning service account can view the Dive without manual ATTACH.
+                  # CREATE OR REPLACE SHARE returns the share's URL in its own result row — no
+                  # second lookup query needed.
+                  share_url = None
+                  try:
+                      share_row = con.execute(ci_database.create_share_sql(db_name)).fetchone()
+                      share_url = share_row[0] if share_row else None
+                  except Exception as _se:
+                      print(f"Warning: CREATE SHARE failed — {_se}", flush=True)
+                  # VD-3330: catches both a raised exception (share_url stays None above)
+                  # and a "succeeded but no usable URL" result row — either way the Dive
+                  # link below won't auto-attach for a non-owner viewer.
+                  share_creation_failed = share_url is None
+
+                  dive_title = f"CI build {db_name}"
+                  jsx = ci_database.build_dive_jsx(db_name, model_schemas, share_url=share_url)
+                  # MD_CREATE_DIVE uses = named args (not :=); returns id for URL construction
+                  row = con.execute(
+                      "SELECT id, title FROM MD_CREATE_DIVE("
+                      "  title = ?,"
+                      "  content = ?,"
+                      "  description = ?"
+                      ")",
+                      [dive_title, jsx, f"CI build of {', '.join(model_schemas.keys())}"]
+                  ).fetchone()
+                  if row:
+                      dive_id, _t = row[0], row[1]
+                      slug = urllib.parse.quote(dive_title, safe="")
+                      dive_url = f"https://app.motherduck.com/dives/{dive_id}/{slug}"
+                      print(f"Dive created: {dive_url}", flush=True)
+                  con.close()
+              except Exception as _e:
+                  print(f"Warning: MD_CREATE_DIVE failed — {_e}", flush=True)
+
+          result = gate_2_result.assemble(db_created, run_results, head_sha, error=build_crash_error, manifest_materializations=manifest_materializations, dive_url=dive_url, db_name=db_name or None, share_creation_failed=share_creation_failed)
+          os.makedirs("reports", exist_ok=True)
+          with open("reports/gate-2.json", "w") as f:
+              json.dump(result, f, indent=2)
+
+          passed = result["overall_status"] == "pass"
+          import runner_io
+          runner_io.set_output("passed", "true" if passed else "false")
+          # VD-3322: fail the job outright when the build failed — job.status /
+          # needs.gate-2-run.result must reflect the real dbt outcome, not just
+          # "no step crashed". Post-comment and status-emission steps below both
+          # carry `if: always()`, so they still run after this exits non-zero.
+          sys.exit(0 if passed else 1)
+          EOF
+
+      - name: Post gate-2 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render, pr_comment
+
+          result = None
+          try:
+              with open("reports/gate-2.json") as f:
+                  result = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          body = notify_render.render_gate_2_comment(result, run_url=os.environ.get("RUN_URL", ""))
+          pr_comment.upsert(
+              notify_render.GATE_2_MARKER,
+              body,
+              os.environ["PR_NUMBER"],
+              os.environ["GITHUB_REPOSITORY"],
+          )
+          EOF
+
+      - name: Emit ci/run final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status, gate_2_result
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # VD-3322: derive from the already-computed gate-2 result, not the
+          # job's own GitHub Actions conclusion — that only reflects "did some
+          # step crash", which stayed 'success' even on a real dbt build failure.
+          result = None
+          try:
+              with open("reports/gate-2.json") as f:
+                  result = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          state, desc = gate_2_result.decide_commit_status(result)
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/run",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+  # ─── GATE 3 — UNIT TESTS ─────────────────────────────────────────────────────
+  # Gate 3: dbt unit tests against the per-PR MotherDuck clone (md:pr_<N>_<sha>).
+  # Runs in parallel with gate-4-data-test; both need gate-2-run only.
+  gate-3-unit:
+    name: "ci/unit-tests: dbt unit tests (MotherDuck)"
+    needs: [preflight, gate-2-run]
+    runs-on: ubuntu-latest
+    if: always() && needs.gate-2-run.result == 'success'
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets[needs.preflight.outputs.motherduck_token_var] }}
+
+    concurrency:
+      group: ci-gate3-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - run: mkdir -p reports
+
+      - name: Emit ci/unit-tests pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/unit-tests",
+              "pending",
+              "Gate 3: unit tests running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Install dbt packages
+        run: dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_ci --quiet
+
+      - name: Run dbt unit tests
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # MOTHERDUCK_TOKEN is set in $GITHUB_ENV by the prior step and is
+          # inherited by the subprocess automatically — no explicit env: entry needed.
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, sys
+          sys.path.insert(0, ".github/scripts")
+
+          head_sha = os.environ["HEAD_SHA"]
+          # HEAD_SHA_SHORT required by dbt_motherduck_ci profile (md:pr_<N>_<sha>).
+          os.environ["HEAD_SHA_SHORT"] = head_sha[:7]
+
+          manifest_path = f"reports/deployment-manifest-{head_sha}.json"
+          with open(manifest_path) as f:
+              dm = json.load(f)
+          names = [a["name"].split(".")[-1] for a in dm.get("artifacts", [])]
+
+          if not names:
+              with open("reports/gate-3.json", "w") as f:
+                  json.dump({"overall_status": "pass", "counts": {"pass": 0, "fail": 0, "error": 0, "skip": 0}, "tests": [], "failures": [], "modified_models": []}, f)
+              print("Gate 3: no models in closure — skipping unit tests.")
+              sys.exit(0)
+
+          # Space separates union selectors: each "{n},test_type:unit" is the AND
+          # of that model with unit tests — mirrors gate3_fabric_runner.py's
+          # selector pattern. A single comma-joined string would instead
+          # intersect all names together, matching no node once names has 2+
+          # entries (VD-3329).
+          select_arg = " ".join(f"{n},test_type:unit" for n in names)
+          subprocess.run([
+              "dbt", "test",
+              "--project-dir", os.environ.get("PROJ", "."),
+              "--select", select_arg,
+              "--profiles-dir", ".github/profiles",
+              "--profile", "dbt_motherduck_ci",
+              "--target", "ci",
+              "--quiet",
+          ])
+
+          # parse_run_results.py writes gate-3.json and exits 0 (pass) or 1 (fail).
+          rc = subprocess.run([
+              "python3", ".github/scripts/parse_run_results.py",
+              "--input", f"{os.environ.get('PROJ', '.')}/target/run_results.json",
+              "--output", "reports/gate-3.json",
+          ]).returncode
+
+          # Augment with modified_models for coverage reporting in render_gate_3.
+          try:
+              with open("reports/gate-3.json") as f:
+                  summary = json.load(f)
+              summary["modified_models"] = names
+              if summary.get("total", 0) == 0:
+                  summary["overall_status"] = "skipped"
+              with open("reports/gate-3.json", "w") as f:
+                  json.dump(summary, f)
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          sys.exit(rc)
+          PYEOF
+
+      - name: Upload gate-3 reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-3-reports-pr${{ github.event.pull_request.number }}
+          path: reports/gate-3.json
+          retention-days: 30
+
+      - name: Emit ci/unit-tests final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              try:
+                  import json as _json
+                  with open("reports/gate-3.json") as _f:
+                      _g3 = _json.load(_f)
+                  if _g3.get("overall_status") == "skipped":
+                      state, desc = "success", "Gate 3: skipped — no unit tests found"
+                  else:
+                      state, desc = "success", "Gate 3: all unit tests passed"
+              except (OSError, _json.JSONDecodeError):
+                  state, desc = "success", "Gate 3: all unit tests passed"
+          else:
+              state, desc = "failure", "Gate 3: unit tests failed — see PR comment"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/unit-tests",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  gate-3-unit-comment:
+    name: "gate-3-unit comment"
+    needs: [preflight, gate-2-run, gate-3-unit]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download gate-3 reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: gate-3-reports-pr${{ github.event.pull_request.number }}
+          path: reports/
+
+      - name: Post gate-3 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REAL_WORK_RESULT: ${{ needs.gate-3-unit.result }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          from notify_render import render_gate_3_comment, GATE_3_MARKER
+          from pr_comment import post_gate_comment
+
+          post_gate_comment(
+              "reports/gate-3.json",
+              render_gate_3_comment,
+              GATE_3_MARKER,
+              os.environ["PR_NUMBER"],
+              os.environ["GITHUB_REPOSITORY"],
+              real_work_result=os.environ["REAL_WORK_RESULT"],
+          )
+          PYEOF
+
+  # ─── GATE 4 — CI/DATA-TESTS ───────────────────────────────────────────────────
+  # `dbt test --store-failures` against the per-PR clone (md:pr_<N>_<sha>) created by Gate 2.
+  # gate4_runner.py is a thin shell: env read → dbt subprocess → run_results parse → status post.
+  gate-4-data-test:
+    name: "ci/data-tests: dbt test --store-failures"
+    needs: [preflight, gate-2-run]
+    runs-on: ubuntu-latest
+    if: always() && needs.gate-2-run.result == 'success'
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Compute head_sha_short
+        id: sha
+        run: echo "short=$(echo '${{ github.event.pull_request.head.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Run Gate 4 (gate4_runner.py)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          MOTHERDUCK_TOKEN: ${{ secrets[needs.preflight.outputs.motherduck_token_var] }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/gate4_runner.py run-gate \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --head-sha-short "${{ steps.sha.outputs.short }}" \
+            --deployment-manifest "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json" \
+            --dbt-project "$PROJ/dbt_project.yml" \
+            --profiles-dir ".github/profiles" \
+            --run-results "$PROJ/target/run_results.json" \
+            --output "reports/gate-4.json"
+
+      - name: Upload Gate 4 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-4-pr${{ github.event.pull_request.number }}
+          path: reports/gate-4.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  gate-4-data-test-comment:
+    name: "gate-4-data-test comment"
+    needs: [preflight, gate-2-run, gate-4-data-test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download gate-4 report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: gate-4-pr${{ github.event.pull_request.number }}
+          path: reports/
+
+      - name: Post gate-4 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REAL_WORK_RESULT: ${{ needs.gate-4-data-test.result }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render
+          from pr_comment import post_gate_comment
+
+          post_gate_comment(
+              "reports/gate-4.json",
+              notify_render.render_gate_4_comment,
+              notify_render.GATE_4_MARKER,
+              os.environ["PR_NUMBER"],
+              os.environ["GITHUB_REPOSITORY"],
+              real_work_result=os.environ["REAL_WORK_RESULT"],
+          )
+          PYEOF
