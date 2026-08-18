@@ -62,3 +62,5 @@ None — static seed loaded once; no refresh cadence.
 - None.
 
 ## Approvals
+
+- [x] User approved intent — 2026-08-18 09:20 (UTC)
