@@ -1,0 +1,97 @@
+# MotherDuck Database Cleanup
+#
+# Reclaims per-PR MotherDuck databases (`pr_<N>_<sha>`) via DROP DATABASE.
+#
+# Triggers:
+#   - schedule         — daily orphan sweep (canonical; authoritative)
+#   - workflow_dispatch
+#   - pull_request_target: closed      — eager eviction on PR close (best-effort)
+#   - pull_request_target: synchronize — drops stale per-SHA databases + Dives on push (AC-36, AC-37)
+#
+# pull_request_target always reads this workflow from the default branch,
+# firing reliably for all PRs regardless of when they were opened (VD-2028).
+# actions/checkout@v5 defaults to the base-branch ref under this trigger —
+# no untrusted PR code is checked out, so secrets exposure is safe.
+
+name: MotherDuck Database Cleanup
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+  pull_request_target:
+    types: [closed, synchronize]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+    outputs:
+      motherduck_token_var: ${{ steps.parse.outputs.motherduck_token_var }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml --quiet
+
+      - name: Parse ci-config.yml indirection keys
+        id: parse
+        run: |
+          python3 - <<'EOF'
+          import os
+          import sys
+
+          sys.path.insert(0, ".github/scripts")
+          from ci_config import locate_ci_config, parse_ci_config
+
+          with open(locate_ci_config()) as f:
+              result = parse_ci_config(f.read())
+
+          if not result["ok"]:
+              print(f"::error::ci-config.yml parse failed: {result['error']}")
+              sys.exit(1)
+
+          config = result["config"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"motherduck_token_var={config.get('MOTHERDUCK_TOKEN_VAR', 'MOTHERDUCK_TOKEN')}\n")
+          EOF
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: load-config
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Drop orphaned per-PR MotherDuck databases
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets[needs.load-config.outputs.motherduck_token_var] }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLEANUP_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}
+          HEAD_SHA: ${{ github.event.action == 'synchronize' && github.event.pull_request.head.sha || '' }}
+        run: |
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, ".github/scripts")
+          import cleanup_runner
+          cleanup_runner.main()
+          EOF
