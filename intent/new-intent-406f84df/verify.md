@@ -22,6 +22,9 @@ certified — all six Coverage rows are covered by green deterministic gates (`d
 | Golden replay | (no baseline named in `design.md`) | n/a | skipped |
 | Project audit | `dbt run --select package:dbt_project_evaluator` then `dbt test --select package:dbt_project_evaluator` | 0 | pass — `ERROR=0`; 8 warnings all from `elementary` package models, none from `stg_customers` |
 | Dev-artifact scan | `grep -rnE 'dev_mode\|add_limit\|--target prod' models/ seeds/` | 0 | pass — no hits |
+| Clean-diff gate | `git push -u origin HEAD` | 0 | pass — "Everything up-to-date"; no build artifacts on the branch |
+| Contract publishing (`publishing-dbt-contracts`) | (not called — staging model, no enforced contract) | n/a | n/a |
+| Model documentation (`documenting-dbt-models`) | (already satisfied — `schema.yml` carries model + column descriptions) | n/a | n/a |
 
 ## Reviewer verdicts
 
