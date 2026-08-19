@@ -1,0 +1,21 @@
+# Parallel non-blocking dbt-project-evaluator quality check (DuckDB native).
+# STUB — reuse fabric workflow when DuckDB CI is wired; see VD-2150.
+name: dbt Project Quality (DuckDB)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  dbt-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=$([ -f .github/ci-config.yml ] && echo .github/ci-config.yml || echo ci-config.yml)" >> "$GITHUB_ENV"
+
+      - name: Stub — not yet implemented
+        run: echo "dbt-project-quality not yet wired. See VD-2150."

@@ -1,0 +1,36 @@
+# dbt-duckdb profiles for the MotherDuck CI bundle.
+#
+# Three profiles ship:
+#   dbt_motherduck_compile — offline, renders database: prd (Gates 0, 1, prod-state publish)
+#   dbt_motherduck_ci      — live, MotherDuck-backed (Gates 2, 3, 4)
+#   dbt_motherduck_prd     — live, targets prd directly (initial seed, domain-deploy, E2E fixture init)
+#
+# CI workflows always pass --profiles-dir .github/profiles; no collision with ~/.dbt/profiles.yml.
+
+dbt_motherduck_compile:
+  target: compile
+  outputs:
+    compile:
+      type: duckdb
+      path: ':memory:'
+      database: prd          # matches MotherDuck production database name
+      schema: main
+      attach:
+        - path: ':memory:'
+          alias: prd         # dbt-duckdb>=1.9.4 requires database to match an attach alias when path is :memory:
+
+dbt_motherduck_ci:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: "md:pr_{{ env_var('PR_NUMBER') }}_{{ env_var('HEAD_SHA_SHORT') }}?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      schema: main
+
+dbt_motherduck_prd:
+  target: prd
+  outputs:
+    prd:
+      type: duckdb
+      path: "md:prd?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      schema: main

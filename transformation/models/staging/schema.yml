@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: stg_raw__customers
+    description: Staging view over raw.customers — renames columns and type-safes signup_date.
+    columns:
+      - name: customer_id
+        description: Customer primary key.
+        tests:
+          - not_null
+          - unique
+      - name: customer_name
+        description: Customer name.
+      - name: signup_date
+        description: Date the customer signed up.
+      - name: country
+        description: Customer country code.
