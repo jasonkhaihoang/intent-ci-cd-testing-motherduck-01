@@ -2,48 +2,48 @@
 
 SELECT
     1 AS id,
-    'Alice Johnson' AS name,
+    'Alice Johnson' AS "name",
     '2024-01-15' AS signup_date,
     'united states' AS country
 UNION ALL
 SELECT
-    2,
-    'Bob Smith',
-    '2024-02-20',
-    'canada'
+    2 AS id,
+    'Bob Smith' AS "name",
+    '2024-02-20' AS signup_date,
+    'canada' AS country
 UNION ALL
 SELECT
-    3,
-    'Carol Lee',
-    '2024-03-10',
-    'united kingdom'
+    3 AS id,
+    'Carol Lee' AS "name",
+    '2024-03-10' AS signup_date,
+    'united kingdom' AS country
 UNION ALL
 SELECT
-    4,
-    'David Kim',
-    '2023-11-05',
-    'south korea'
+    4 AS id,
+    'David Kim' AS "name",
+    '2023-11-05' AS signup_date,
+    'south korea' AS country
 UNION ALL
 SELECT
-    5,
-    'Eva Martinez',
-    '2024-04-22',
-    'spain'
+    5 AS id,
+    'Eva Martinez' AS "name",
+    '2024-04-22' AS signup_date,
+    'spain' AS country
 UNION ALL
 SELECT
-    6,
-    'Frank Chen',
-    '2023-12-01',
-    'china'
+    6 AS id,
+    'Frank Chen' AS "name",
+    '2023-12-01' AS signup_date,
+    'china' AS country
 UNION ALL
 SELECT
-    7,
-    'Grace Patel',
-    '2024-05-30',
-    'india'
+    7 AS id,
+    'Grace Patel' AS "name",
+    '2024-05-30' AS signup_date,
+    'india' AS country
 UNION ALL
 SELECT
-    8,
-    'Henry Brown',
-    '2024-06-14',
-    'australia'
+    8 AS id,
+    'Henry Brown' AS "name",
+    '2024-06-14' AS signup_date,
+    'australia' AS country
