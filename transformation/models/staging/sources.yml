@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: main
+    tables:
+      - name: customers
+        description: Raw customer records seeded from customers.csv.
+        columns:
+          - name: id
+            description: Customer primary key.
+          - name: name
+            description: Customer name.
+          - name: signup_date
+            description: Date the customer signed up.
+          - name: country
+            description: Customer country code.

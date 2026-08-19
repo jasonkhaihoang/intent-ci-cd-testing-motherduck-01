@@ -1,0 +1,27 @@
+# Studio-owned MotherDuck dbt profile (VD-3794). Both database names are
+# delivered by the Runtime Location Contract env and prefixed with `md:` here —
+# never a literal database name, never a filesystem path (there is no sandbox
+# file on this platform; the sandbox is a remote database, proven by connecting).
+#
+# No `attach:` of the Domain database in `dev`, unlike the DuckDB-local profile:
+# the MotherDuck sandbox arrives as a clone of the Domain database, so its
+# relations are already present in the primary catalog. The DuckDB-local alias
+# exists only because that sandbox is a separate file.
+#
+# No token anywhere: the `vd-dbt.sh` shim mints the acting user's MotherDuck PAT
+# from Studio's Credential Broker per invocation and exports it only into the
+# child dbt process (VD-4038).
+dbt_motherduck:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "md:{{ env_var('VD_EPHM_MOTHERDUCK_DATABASE') }}"
+      schema: "{{ env_var('VD_EPHM_SCHEMA') }}"
+      threads: 4
+
+    prod:
+      type: duckdb
+      path: "md:{{ env_var('VD_DOMAIN_MOTHERDUCK_DATABASE') }}"
+      schema: "{{ env_var('VD_DOMAIN_SCHEMA') }}"
+      threads: 4
