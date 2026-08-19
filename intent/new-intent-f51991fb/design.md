@@ -3,7 +3,7 @@
 ## Architecture
 
 - **Grain** — `stg_customers` is one row per customer, keyed by `id`.
-- **Approach** — a project-owned source model `src_customers` (8 rows, `materialized='table'`) feeds a single staging view `stg_customers` that performs a trivial shape/type transform: cast `signup_date` to DATE, `upper(country)`, pass `id` and `name` through. Materialization follows the project's layer config (`staging: +materialized: view` in `dbt_project.yml`; `src_customers` overrides to `table`).
+- **Approach** — a project-owned source model `src_customers` (8 rows, `materialized='table'`) feeds a single staging view `stg_customers` that performs a trivial shape/type transform: cast `signup_date` to DATE, `upper(country)`, pass `id` and `customer_name` through. Materialization follows the project's layer config (`staging: +materialized: view` in `dbt_project.yml`; `src_customers` overrides to `table`).
 - **Source model over seed** — the repo's dbt project has no existing source wiring (empty `models/`, `seeds/`, no `sources.yml`), so `src_customers` is authored in-repo as a dbt model rather than a source + manual insert. This keeps the data version-controlled and self-contained, and — unlike a dbt seed — it is part of the deployment-manifest closure (`dbt ls --resource-type model`), so the CI's model-only `dbt run` materializes it and `stg_customers` can `ref()` it.
 - **Naming** — `stg_customers` per the request. The domain's `stg_{source}__{table}` convention presupposes an external source system; a project-owned source model has no source system to name, so the literal name is used. Recorded in `docs/adr/0001-staging-model-naming-for-project-owned-source-models.md`.
 
@@ -18,7 +18,7 @@
 
 ## Source Mapping / Discovery
 
-- `src_customers` (dbt model, authored in-scope; columns `id`, `name`, `signup_date`, `country`; 8 rows) → `stg_customers` (staging view).
+- `src_customers` (dbt model, authored in-scope; columns `id`, `customer_name`, `signup_date`, `country`; 8 rows) → `stg_customers` (staging view).
 
 ## Change Impact
 

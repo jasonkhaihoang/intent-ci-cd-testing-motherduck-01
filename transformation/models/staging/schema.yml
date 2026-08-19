@@ -8,7 +8,7 @@ models:
     columns:
       - name: id
         description: Unique customer identifier.
-      - name: name
+      - name: customer_name
         description: Customer full name.
       - name: signup_date
         description: Date the customer signed up (ISO YYYY-MM-DD).
@@ -25,7 +25,7 @@ models:
         tests:
           - not_null
           - unique
-      - name: name
+      - name: customer_name
         description: Customer full name.
       - name: signup_date
         description: Date the customer signed up, cast to DATE.

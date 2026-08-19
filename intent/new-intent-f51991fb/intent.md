@@ -10,7 +10,7 @@ Fix the CI failures on the `stg_customers` staging model from PR #1 so the build
 
 ## Source system
 
-A project-owned source model `transformation/models/staging/src_customers.sql` (columns `id`, `name`, `signup_date`, `country`; 8 rows), feeding `transformation/models/staging/stg_customers.sql`.
+A project-owned source model `transformation/models/staging/src_customers.sql` (columns `id`, `customer_name`, `signup_date`, `country`; 8 rows), feeding `transformation/models/staging/stg_customers.sql`.
 
 ## Target
 

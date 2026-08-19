@@ -6,7 +6,7 @@
 
 SELECT
     id,
-    name,
+    customer_name,
     CAST(signup_date AS DATE) AS signup_date,
     UPPER(country) AS country
 FROM {{ ref('src_customers') }}
