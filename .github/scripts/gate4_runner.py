@@ -106,8 +106,10 @@ def cmd_run_gate(args) -> int:
         "HEAD_SHA_SHORT": args.head_sha_short,
     }
 
+    project_dir = str(pathlib.Path(args.dbt_project).parent)
+
     subprocess.run(
-        ["dbt", "deps", "--profiles-dir", args.profiles_dir, "--profile", PROFILE, "--quiet"],
+        ["dbt", "deps", "--project-dir", project_dir, "--profiles-dir", args.profiles_dir, "--profile", PROFILE, "--quiet"],
         env=env,
         capture_output=True,
         text=True,
@@ -116,6 +118,7 @@ def cmd_run_gate(args) -> int:
     cmd = [
         "dbt", "test",
         "--store-failures",
+        "--project-dir", project_dir,
         "--profiles-dir", args.profiles_dir,
         "--profile", PROFILE,
         "--target", TARGET,
