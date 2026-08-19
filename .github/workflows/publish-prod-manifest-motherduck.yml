@@ -1,0 +1,64 @@
+# Publishes the prod dbt manifest artifact on push to main.
+# Uses dbt_motherduck_compile (offline, database: prd) — no live MotherDuck connection required.
+# Gate 1 of any subsequent PR downloads this artifact as the state:modified+ baseline.
+# See docs/design/MotherDuck/motherduck-ci-workflow-design.md §prod-state-manifest
+name: Publish Prod Manifest (MotherDuck)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        if: vars.FAKE_WORLD == ''
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dbt-duckdb
+        run: |
+          DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
+          pip install "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+
+      - name: Add fake-world dbt shim to PATH
+        if: vars.FAKE_WORLD != ''
+        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_compile --target compile --quiet
+
+      - name: Generate dbt Docs static site
+        run: |
+          dbt docs generate --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_compile --target compile --static --empty-catalog --no-compile --quiet
+
+      # `dbt docs generate` rewrites target/manifest.json, but against the same
+      # profile+target as the parse above, so no staging copy is needed here — unlike the
+      # Fabric bundle, which parses a second time against a different (prod) target and
+      # must therefore restore the selection manifest before publishing.
+      #
+      # The manifest rides the docs release rather than an Actions artifact (VD-4418):
+      # release assets are repository contents, which the brokered agent GitHub token can
+      # read, while `gh run download` needs Actions read and is unreachable from an Intent.
+      # Only the selection name is published — the compile target is already the prod
+      # database, so this one manifest serves both selection and `--defer --state`.
+      - name: Publish dbt Docs and prod manifest to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/publish_dbt_docs_release.py "$PROJ/target" \
+            static_index.html manifest.json
