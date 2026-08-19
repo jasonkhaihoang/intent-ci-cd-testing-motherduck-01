@@ -311,7 +311,8 @@ def fetch_greenfield() -> None:
 
     # Diagnostic only: surface project-level errors. Output NOT used as prod manifest.
     deps = subprocess.run(
-        ["dbt", "deps", "--profiles-dir", ".github/profiles", "--target", "dbt_quality"],
+        ["dbt", "deps", "--project-dir", runner_io.project_dir(),
+         "--profiles-dir", ".github/profiles", "--target", "dbt_quality"],
         capture_output=True, text=True,
     )
     if deps.returncode != 0:
@@ -324,6 +325,7 @@ def fetch_greenfield() -> None:
     parse = subprocess.run(
         [
             "dbt", "parse",
+            "--project-dir", runner_io.project_dir(),
             "--profiles-dir", ".github/profiles",
             "--target", "dbt_quality",
             "--exclude", "package:elementary",

@@ -34,6 +34,7 @@ except ImportError:
     yaml = None
 
 import emit_status
+import runner_io
 from parse_run_results import check_store_failures_config, enrich_tests_from_manifest, parse_data_test_results
 
 CONTEXT = "ci/data-tests"
@@ -107,7 +108,8 @@ def cmd_run_gate(args) -> int:
     }
 
     subprocess.run(
-        ["dbt", "deps", "--profiles-dir", args.profiles_dir, "--profile", PROFILE, "--quiet"],
+        ["dbt", "deps", "--project-dir", runner_io.project_dir(),
+         "--profiles-dir", args.profiles_dir, "--profile", PROFILE, "--quiet"],
         env=env,
         capture_output=True,
         text=True,
@@ -115,6 +117,7 @@ def cmd_run_gate(args) -> int:
 
     cmd = [
         "dbt", "test",
+        "--project-dir", runner_io.project_dir(),
         "--store-failures",
         "--profiles-dir", args.profiles_dir,
         "--profile", PROFILE,

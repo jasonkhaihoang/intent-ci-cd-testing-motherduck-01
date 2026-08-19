@@ -1147,7 +1147,7 @@ jobs:
           con.close()
           EOF
 
-      - name: dbt run — build closure against per-PR clone
+      - name: dbt deps/seed/run — build closure against per-PR clone
         id: dbt-run
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -1175,6 +1175,19 @@ jobs:
           EOF
 
           dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_ci --quiet
+
+          # AC-78/AC-79: seed before build so a state:modified model's ref() to a
+          # dbt seed resolves. Unconditional — the deployment manifest lists only
+          # models, never seeds. Seed's exit code is captured but not enforced —
+          # mirrors the dbt deps call above (also unguarded); the real pass/fail
+          # signal comes from gate_2_result.assemble's overall_status, same as
+          # Fabric's approach in gate2_fabric_runner.py (a seed referenced by a
+          # model in this PR's closure surfaces there as a downstream build
+          # failure; a seed referenced only by something outside this PR's
+          # closure will not — the echo below exists purely so a human scanning
+          # the job log for "why didn't my seed load" has something to find).
+          dbt seed --project-dir "$PROJ" --profiles-dir .github/profiles --profile dbt_motherduck_ci --target ci --no-use-colors 2>&1 || SEED_RC=$?
+          echo "dbt seed exit code: ${SEED_RC:-0}"
 
           SELECT=$(cat reports/gate2_select.txt)
           if [ -n "$SELECT" ]; then

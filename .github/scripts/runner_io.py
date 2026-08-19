@@ -69,3 +69,10 @@ def error(msg: str) -> None:
 
 def notice(msg: str) -> None:
     print(f"::notice::{msg}", flush=True)
+
+
+def project_dir() -> str:
+    """Resolve the dbt project directory from $PROJ (set by each workflow job's
+    'Resolve layout' step), defaulting to "." when unset — mirrors the resolution
+    dbt_ls.py already uses for `dbt ls` (VD-4404)."""
+    return os.environ.get("PROJ", ".")
