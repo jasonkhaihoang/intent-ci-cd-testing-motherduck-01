@@ -1,0 +1,43 @@
+# Studio-owned DuckDB dbt project (VD-3794), shared by DuckDB-local and
+# MotherDuck — the two differ only in which profile they bind to, and that is
+# the `dbt_motherduck` token. Seeded skip_if_exists, so a domain that has
+# already customized its project keeps it untouched on every later spawn.
+#
+# `motherduck_domain_01` and `dbt_motherduck` are substituted at seed time by
+# the template engine, NOT by dbt. `name:` identifies the project and must equal
+# the top-level keys under `models:` and `sources:`; `profile:` is a lookup key
+# into the seeded transformation/profiles.yml and is deliberately different.
+#
+# No `dispatch:` block: the Elementary Fabric Spark adapter overrides exist only
+# for dbt-fabricspark. On dbt-duckdb the stock Elementary macros apply.
+name: 'motherduck_domain_01'
+version: '1.0.0'
+config-version: 2
+
+profile: 'dbt_motherduck'
+
+model-paths: ['models']
+analysis-paths: ['analyses']
+test-paths: ['tests']
+seed-paths: ['seeds']
+macro-paths: ['macros']
+snapshot-paths: ['snapshots']
+
+clean-targets:
+  - 'target'
+  - 'dbt_packages'
+
+models:
+  'motherduck_domain_01':
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: ephemeral
+    marts:
+      +materialized: table
+
+# The project key must be present and match `name:`. It carries an explicit
+# `+enabled` rather than a bare null, which dbt does not accept as a config block.
+sources:
+  'motherduck_domain_01':
+    +enabled: true

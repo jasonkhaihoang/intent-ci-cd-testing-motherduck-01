@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# git's literal pre-push hook entry point once core.hooksPath resolves here.
+# The actual logic lives in domain_repo_pre_hook_runner.py so it can be unit
+# tested like every other gate script in this repo (CLAUDE.md doctrine).
+# `exec` (not a subshell call) passes this process's stdin — git's own
+# pre-push ref-update lines — straight through to the runner untouched.
+set -uo pipefail
+dir="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+runner="$dir/.github/scripts/domain_repo_pre_hook_runner.py"
+# AC-DRPH-38: a broken/partial bundle deployment (runner missing) must fail
+# open, not fail closed. Without this check, python3's file-not-found exit is
+# non-zero, and git reads any non-zero hook exit as "reject the push." The
+# same reasoning applies if python3 itself is not on PATH (minimal container,
+# some Git-for-Windows setups, stripped-PATH GUI clients): a shell exit 127
+# from a missing `exec` target must not block the push either.
+command -v python3 >/dev/null 2>&1 || exit 0
+[ -f "$runner" ] || exit 0
+exec python3 "$runner" "$@"

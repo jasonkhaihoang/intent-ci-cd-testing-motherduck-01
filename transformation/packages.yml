@@ -1,0 +1,15 @@
+# Studio-owned DuckDB dbt package manifest (VD-3794), shared by DuckDB-local and
+# MotherDuck. Static pins, no domain coordinates. Seeded skip_if_exists — a domain
+# that adds its own packages keeps them.
+#
+# No Elementary Fabric Spark override here: that mirror exists only to make
+# Elementary's macros compile on dbt-fabricspark. dbt-duckdb runs stock Elementary.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: ['>=1.3.0', '<2.0.0']
+  - package: elementary-data/elementary
+    version: ['>=0.15.0', '<1.0.0']
+  - package: metaplane/dbt_expectations
+    version: ['>=0.10.0', '<1.0.0']
+  - package: dbt-labs/dbt_project_evaluator
+    version: ['>=1.0.0', '<2.0.0']
