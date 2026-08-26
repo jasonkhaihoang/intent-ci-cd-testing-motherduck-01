@@ -1,0 +1,16 @@
+# Profiles for dbt-project-quality.yml only.
+# Isolated DuckDB profile — does not touch the live dbt_motherduck_compile /
+# dbt_motherduck_ci / dbt_motherduck_prd profiles in ../profiles.yml, so the
+# evaluator run never reads/writes the live per-PR MotherDuck database.
+#
+# path is DBT_QUALITY_DUCKDB_PATH (set in dbt-project-quality.yml's env:) —
+# the same variable dbt_quality_comment.py reads, so the writer and reader
+# cannot drift to different filenames again (VD-4731/AC-85; VD-4735 parity).
+dbt_project_quality_profile:
+  outputs:
+    dbt_quality:
+      type: duckdb
+      path: "{{ env_var('DBT_QUALITY_DUCKDB_PATH') }}"
+      schema: main
+      threads: 4
+  target: dbt_quality
