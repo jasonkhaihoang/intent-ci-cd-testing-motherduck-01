@@ -1,0 +1,11 @@
+id,customer_id,product,quantity,unit_price,sale_date,region
+1,1,Widget A,10,25.00,2024-01-10,US
+2,2,Widget B,5,40.00,2024-01-15,CA
+3,3,Widget A,8,25.00,2024-02-01,US
+4,1,Widget C,3,60.00,2024-02-14,US
+5,4,Widget B,12,40.00,2024-03-05,DE
+6,5,Widget A,20,25.00,2024-03-18,US
+7,2,Widget C,7,60.00,2024-04-02,CA
+8,3,Widget B,15,40.00,2024-04-20,US
+9,4,Widget A,6,25.00,2024-05-11,DE
+10,5,Widget C,9,60.00,2024-06-01,US
