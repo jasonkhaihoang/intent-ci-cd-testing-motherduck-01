@@ -12,6 +12,7 @@ Public surface:
     render_scorecard(report)         — (passed, markdown)
     render_gate_0(compile, schema_gate) — (passed, markdown)
     render_gate_3(summary)           — (passed, markdown)
+    render_adr_numbering_comment(duplicates, dangling) — (markdown)
     toggle_gate_5_ack(body, *, ack_active) — toggle ack banner in existing Gate 5 body
 """
 
@@ -1579,3 +1580,36 @@ def render_details_comment(bundle: ReportBundle) -> str:
         parts.append(gate_4_section + "\n")
 
     return "".join(parts)
+
+
+ADR_NUMBERING_MARKER = "<!-- ci-adr-numbering -->"
+
+
+def render_adr_numbering_comment(duplicates: dict, dangling: list) -> str:
+    """AC-87: own marker, upserted every run. AC-88: findings under distinct
+    headings. AC-89: all-clear (including the no-ADR-files short-circuit,
+    which passes empty duplicates/dangling here same as a clean, populated run)."""
+    if not duplicates and not dangling:
+        return (
+            f"{ADR_NUMBERING_MARKER}\n## ADR Numbering (ci/adr-numbering) ✅\n\n"
+            f"No duplicate ADR numbers or dangling references.\n"
+        )
+
+    sections = []
+    if duplicates:
+        rows = "\n".join(
+            f"| {number} | {', '.join(sorted(files))} |"
+            for number, files in sorted(duplicates.items())
+        )
+        sections.append(
+            f"### Duplicate ADR numbers\n\n| Number | Files |\n| --- | --- |\n{rows}\n"
+        )
+    if dangling:
+        rows = "\n".join(
+            f"| {f['file']} | {f['line']} | ADR-{f['number']} |" for f in dangling
+        )
+        sections.append(
+            f"### Dangling references\n\n| File | Line | Missing |\n| --- | --- | --- |\n{rows}\n"
+        )
+
+    return f"{ADR_NUMBERING_MARKER}\n## ADR Numbering (ci/adr-numbering) ❌\n\n" + "\n".join(sections)

@@ -211,7 +211,12 @@ jobs:
           EOF
 
       - name: Run ADR numbering check
-        run: python3 ${{ env.SCRIPTS }}/adr_lint.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/adr_lint.py \
+            --pr-number "${{ github.event.pull_request.number }}"
 
       - name: Emit ci/adr-numbering success
         if: success()
@@ -310,7 +315,7 @@ jobs:
 
       - name: ruff
         continue-on-error: true
-        run: ruff check . --exclude .github --output-format json > reports/ruff.json 2>/dev/null
+        run: ruff check . --extend-exclude .github --output-format json > reports/ruff.json 2>/dev/null
 
       - name: sqlfluff
         continue-on-error: true
@@ -1659,6 +1664,7 @@ jobs:
             --dbt-project "$PROJ/dbt_project.yml" \
             --profiles-dir ".github/profiles" \
             --run-results "$PROJ/target/run_results.json" \
+            --manifest "$PROJ/target/manifest.json" \
             --output "reports/gate-4.json"
 
       - name: Upload Gate 4 report

@@ -1,9 +1,12 @@
 """ADR numbering check: duplicate-number and dangling-cross-reference detection.
 
 CLI:
-    adr_lint.py
+    adr_lint.py --pr-number <N>
 
-See docs/functional/domain-pr-review-approval/README.md (AC-66..AC-73) and
+Reads GITHUB_REPOSITORY from the environment to post its PR comment (AC-87..89);
+omit --pr-number or GITHUB_REPOSITORY to skip commenting (e.g. a local/manual run).
+
+See docs/functional/domain-pr-review-approval/README.md (AC-66..AC-73, AC-87..89) and
 docs/design/domain-pr-review-approval/adr-numbering/README.md for the full contract.
 """
 
@@ -11,6 +14,9 @@ import glob
 import os
 import re
 import sys
+
+import notify_render
+import pr_comment
 
 
 _ADR_FILENAME_RE = re.compile(r"^(\d{4})-.*\.md$")
@@ -56,11 +62,18 @@ def _read_docs_tree() -> list:
     return files
 
 
-def main() -> int:
+def _post_pr_comment(pr_number: str | None, repo: str | None, duplicates: dict, dangling: list) -> None:
+    """AC-87: post on every outcome."""
+    body = notify_render.render_adr_numbering_comment(duplicates, dangling)
+    pr_comment.post_or_log(notify_render.ADR_NUMBERING_MARKER, body, pr_number, repo)
+
+
+def main(pr_number: str | None = None, repo: str | None = None) -> int:
     adr_dir = "docs/adr"
     adr_filenames = sorted(os.path.basename(p) for p in glob.glob(os.path.join(adr_dir, "*.md")))
     if not adr_filenames:
         print("No ADR files found under docs/adr/ — nothing to check.")
+        _post_pr_comment(pr_number, repo, {}, [])
         return 0
 
     duplicates = find_duplicate_adr_numbers(adr_filenames)
@@ -71,6 +84,7 @@ def main() -> int:
 
     if not duplicates and not dangling:
         print("ADR numbering check passed: no duplicate numbers, no dangling references.")
+        _post_pr_comment(pr_number, repo, duplicates, dangling)
         return 0
 
     if duplicates:
@@ -83,8 +97,14 @@ def main() -> int:
         for finding in dangling:
             print(f"  {finding['file']}:{finding['line']} cites ADR-{finding['number']}, which has no matching file")
 
+    _post_pr_comment(pr_number, repo, duplicates, dangling)
     return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pr-number")
+    args = parser.parse_args()
+    sys.exit(main(pr_number=args.pr_number, repo=os.environ.get("GITHUB_REPOSITORY")))

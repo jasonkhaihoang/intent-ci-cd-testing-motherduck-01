@@ -76,3 +76,15 @@ def project_dir() -> str:
     'Resolve layout' step), defaulting to "." when unset — mirrors the resolution
     dbt_ls.py already uses for `dbt ls` (VD-4404)."""
     return os.environ.get("PROJ", ".")
+
+
+def target_path(rel: str) -> str:
+    """Join a dbt target-relative path (e.g. "target/build/run_results.json") under
+    $PROJ. Every gate runner that reads a file dbt wrote under --project-dir must
+    route through this instead of hardcoding a repo-root-relative literal (VD-4637).
+
+    Not for --state CLI argument values passed back to dbt: dbt resolves --state
+    relative to --project-dir itself (dbt/contracts/state.py), so a --state value
+    must stay project-dir-relative, not be joined with project_dir() a second time.
+    """
+    return os.path.join(project_dir(), rel)

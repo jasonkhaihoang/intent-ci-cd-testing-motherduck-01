@@ -11,6 +11,7 @@ Usage:
         --head-sha-short abc1234 \
         --deployment-manifest reports/deployment-manifest-abc123def456.json \
         --dbt-project dbt_project.yml \
+        --manifest target/manifest.json \
         --profiles-dir .github/profiles \
         --run-results target/run_results.json \
         --output reports/gate-4.json
@@ -178,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dbt-project", default="dbt_project.yml")
     p.add_argument("--profiles-dir", default=".github/profiles")
     p.add_argument("--run-results", default="target/run_results.json")
-    p.add_argument("--manifest", default="target/manifest.json")
+    p.add_argument("--manifest", default=runner_io.target_path("target/manifest.json"))
     p.add_argument("--output", default=None)
     args = parser.parse_args(argv)
     return {"run-gate": cmd_run_gate}[args.command](args)
