@@ -7,6 +7,7 @@ live with their renderers; this module is purely transport.
 Public surface:
     find_by_marker(marker, pr_number, repo) -> str | None
     upsert(marker, body, pr_number, repo) -> None
+    post_or_log(marker, body, pr_number, repo) -> None
 """
 
 import json
@@ -58,6 +59,20 @@ def upsert(marker: str, body: str, pr_number: str, repo: str) -> None:
             sys.exit(1)
     finally:
         os.unlink(tmp_path)
+
+
+def post_or_log(marker: str, body: str, pr_number: str | None, repo: str | None) -> None:
+    """Upsert the PR comment, never raising: skips when `pr_number`/`repo` is
+    missing (e.g. a local/manual run), and logs rather than propagates if
+    `upsert` fails — a comment-post failure should never mask the caller's
+    own exit code.
+    """
+    if not pr_number or not repo:
+        return
+    try:
+        upsert(marker, body, pr_number, repo)
+    except BaseException as e:
+        print(f"Failed to post PR comment: {e}", flush=True)
 
 
 def select_trusted_comment(comments: list[dict], marker: str, trusted_author: str) -> str | None:

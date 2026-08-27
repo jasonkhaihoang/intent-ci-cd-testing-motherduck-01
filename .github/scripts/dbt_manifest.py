@@ -135,6 +135,32 @@ class Manifest:
     def source(self, uid: str) -> dict | None:
         return self._sources.get(uid)
 
+    def seed_table_names(self) -> set[str]:
+        """Table names (alias, falling back to name) materialized by a same-project
+        `dbt seed` node.
+
+        A source registered in sources.yml but actually populated by a seed in the
+        same project has no physical existence in prod — callers that derive
+        prod-shortcut candidates from sources should skip these. Matched by name
+        only, not schema: a seed's manifest `schema` reflects whatever profile
+        target parsed it (e.g. a compile-only target's dummy schema), which has
+        no relation to the schema the source declares it will land in.
+
+        Scoped to the domain's own dbt project (`package_name == metadata.project_name`,
+        mirroring `_is_own_model`'s convention) — a same-named seed shipped by an
+        installed dbt package must never suppress a legitimate project source.
+        """
+        return {
+            n.get("alias") or n.get("name", "")
+            for n in self._nodes.values()
+            if n.get("resource_type") == "seed" and self._is_own_package(n)
+        }
+
+    def _is_own_package(self, node: dict) -> bool:
+        if self._project_name:
+            return node.get("package_name") == self._project_name
+        return True
+
     @property
     def nodes(self) -> dict:
         """Underlying nodes dict — used by consumers that iterate the full node table."""

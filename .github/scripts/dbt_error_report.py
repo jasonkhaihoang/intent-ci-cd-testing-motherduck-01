@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 import parse_run_results as prr
+import runner_io
 
 # Matches: "Compilation Error in model my_model (path/to/model.sql)"
 # Also handles dbt log-prefixed lines like "16:04:22  Compilation Error in model …"
@@ -72,7 +73,11 @@ def main() -> None:
         errors = []
     else:
         try:
-            with open("target/run_results.json") as f:
+            # $PROJ is trusted as the resolved dbt project dir here; it is not
+            # cross-checked against dbt_args' own --project-dir value. The two
+            # agree today only because every ci.yml call site passes
+            # --project-dir "$PROJ" literally (VD-4656).
+            with open(runner_io.target_path("target/run_results.json")) as f:
                 data = json.load(f)
             summary = prr.summarize(data)
             errors = _extract_errors_from_summary(summary["failures"])
