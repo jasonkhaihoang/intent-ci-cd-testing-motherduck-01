@@ -580,7 +580,7 @@ jobs:
           modified=$(dbt ls \
                        --project-dir "$PROJ" \
                        --select state:modified+ \
-                       --state prod-state \
+                       --state "$(pwd)/prod-state" \
                        --profiles-dir .github/profiles \
                        --profile dbt_motherduck_compile \
                        --target compile \
