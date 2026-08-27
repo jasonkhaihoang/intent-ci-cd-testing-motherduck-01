@@ -1,21 +1,118 @@
-# Parallel non-blocking dbt-project-evaluator quality check (DuckDB native).
-# STUB — reuse fabric workflow when DuckDB CI is wired; see VD-2150.
-name: dbt Project Quality (DuckDB)
+# dbt Quality Workflow (MotherDuck)
+#
+# Runs dbt-project-evaluator on every PR using DuckDB (offline, isolated from
+# the live per-PR MotherDuck database). Runs in parallel with ci.yml — never
+# gates a required branch-protection status, so it never blocks merge. Posts
+# evaluation results as a PR comment (advisory). ci/dbt-project-evaluate can
+# still report `failure` — e.g. when the evaluator's results database is
+# missing or unreadable (VD-4731/AC-84) — as a visibility signal only.
+#
+# Parity with domain-ci-fabric-bundle's dbt-project-quality.yml (VD-4735,
+# AC-86). Reuses the shared, platform-agnostic dbt_quality_comment.py and
+# emit_status.py — see docs/design/Fabric/fabric-dbt-project-eval-ci-workflow-design.md §10.
+
+name: dbt Quality
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  SCRIPTS: .github/scripts
+  # Single source of truth for the evaluator's results path (VD-4731, AC-85) — the
+  # dbt-quality profile reads this via env_var(), dbt_quality_comment.py reads
+  # it via os.environ. Keep both in sync by changing only this line.
+  DBT_QUALITY_DUCKDB_PATH: /tmp/vibedata_dbt_quality.duckdb
 
 jobs:
-  dbt-quality:
+  dbt-project-evaluate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve layout
         run: |
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
-          echo "CICFG=$([ -f .github/ci-config.yml ] && echo .github/ci-config.yml || echo ci-config.yml)" >> "$GITHUB_ENV"
 
-      - name: Stub — not yet implemented
-        run: echo "dbt-project-quality not yet wired. See VD-2150."
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Emit ci/dbt-project-evaluate pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/emit_status.py \
+            --context "ci/dbt-project-evaluate" \
+            --state pending \
+            --description "dbt-project-evaluate: running" \
+            --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Install dependencies
+        run: pip install dbt-duckdb dbt-core pyyaml --quiet
+
+      - name: dbt deps
+        run: dbt deps --project-dir "$PROJ" --quiet
+
+      - name: dbt compile (offline)
+        run: |
+          dbt compile \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles/dbt-quality \
+            --profile dbt_project_quality_profile \
+            --target dbt_quality \
+            --quiet 2>/dev/null || true
+
+      - name: Run dbt-project-evaluator
+        # A Studio-seeded dbt_project.yml gates the package off by default so it
+        # neither materializes into the domain's own schema nor reaches the
+        # generated docs site (VD-4701), so this step has to ask for it: without
+        # the var the selection resolves to zero nodes and the `|| true` hides it.
+        # The var is ignored by a project carrying no such gate, so it is safe
+        # against every domain repo regardless of when it was seeded.
+        run: |
+          dbt build \
+            --project-dir "$PROJ" \
+            --select dbt_project_evaluator \
+            --vars '{dbt_project_evaluator_enabled: true}' \
+            --profiles-dir .github/profiles/dbt-quality \
+            --profile dbt_project_quality_profile \
+            --target dbt_quality \
+            --quiet || true
+
+      - name: Post PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/dbt_quality_comment.py
+
+      - name: Emit ci/dbt-project-evaluate final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then
+            STATE=success
+            DESC="dbt-project-evaluate: passed"
+          else
+            STATE=failure
+            DESC="dbt-project-evaluate: failed"
+          fi
+          python3 ${{ env.SCRIPTS }}/emit_status.py \
+            --context "ci/dbt-project-evaluate" \
+            --state "$STATE" \
+            --description "$DESC" \
+            --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

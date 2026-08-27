@@ -3,7 +3,7 @@
 # the per-platform GHA Variable/Secret name-indirection keys (ADR-0018) are
 # seeded once and preserved thereafter (VD-3364 AC, ADR-0019).
 VD_DOMAIN_DATA_PLATFORM: motherduck
-VD_DOMAIN_SLUG: motherduck-domain-01
+VD_DOMAIN_SLUG: motherduck-domain
 VD_DOMAIN_SCHEMA: main
 VD_DOMAIN_MOTHERDUCK_DATABASE: sa_prd
 VD_DOMAIN_PROD_MANIFEST_SOURCE:
