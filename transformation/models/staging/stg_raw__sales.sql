@@ -9,9 +9,9 @@ renamed as (
         product,
         quantity,
         unit_price,
-        quantity * unit_price as total_amount,
+        region,
         cast(sale_date as date) as sale_date,
-        region
+        quantity * unit_price as total_amount
     from source
 )
 
