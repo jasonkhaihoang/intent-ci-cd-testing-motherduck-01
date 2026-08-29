@@ -580,7 +580,7 @@ jobs:
           modified=$(dbt ls \
                        --project-dir "$PROJ" \
                        --select state:modified+ \
-                       --state prod-state \
+                       --state "$(pwd)/prod-state" \
                        --profiles-dir .github/profiles \
                        --profile dbt_motherduck_compile \
                        --target compile \
@@ -1134,15 +1134,6 @@ jobs:
           stale = ci_database.stale_pr_databases(all_db_names, pr_number=pr_number, current_db_name=current_db_name)
           print(f"Stale databases to drop: {stale}", flush=True)
           for name in stale:
-              # VD-3477: share must drop before its database — MotherDuck refuses
-              # DROP DATABASE while a share still references it.
-              share_sql = ci_database.drop_share_sql(name)
-              print(f"  -> {share_sql}", flush=True)
-              try:
-                  con.execute(share_sql)
-              except Exception as exc:
-                  print(f"     WARNING: DROP SHARE failed (best-effort) — {exc}", file=sys.stderr, flush=True)
-
               sql = ci_database.drop_database_sql(name)
               print(f"  -> {sql}", flush=True)
               try:
@@ -1268,56 +1259,7 @@ jobs:
           except (OSError, json.JSONDecodeError):
               pass
 
-          # AC-10: create the Dive when the DB was created and models were built
-          dive_url = None
-          share_creation_failed = False
-          model_schemas = ci_database.extract_model_schemas(run_results)
-          if db_created and db_name and model_schemas:
-              try:
-                  import duckdb, urllib.parse
-                  fake_dir = os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR")
-                  if fake_dir:
-                      con = duckdb.connect(os.path.join(fake_dir, f"{db_name}.duckdb"))
-                  else:
-                      token = os.environ["MOTHERDUCK_TOKEN"]
-                      con = duckdb.connect(f"md:{db_name}?motherduck_token={token}")
-
-                  # AC-10 extension (VD-3321): org-scoped read-only share so a PR author who
-                  # isn't the owning service account can view the Dive without manual ATTACH.
-                  # CREATE OR REPLACE SHARE returns the share's URL in its own result row — no
-                  # second lookup query needed.
-                  share_url = None
-                  try:
-                      share_row = con.execute(ci_database.create_share_sql(db_name)).fetchone()
-                      share_url = share_row[0] if share_row else None
-                  except Exception as _se:
-                      print(f"Warning: CREATE SHARE failed — {_se}", flush=True)
-                  # VD-3330: catches both a raised exception (share_url stays None above)
-                  # and a "succeeded but no usable URL" result row — either way the Dive
-                  # link below won't auto-attach for a non-owner viewer.
-                  share_creation_failed = share_url is None
-
-                  dive_title = f"CI build {db_name}"
-                  jsx = ci_database.build_dive_jsx(db_name, model_schemas, share_url=share_url)
-                  # MD_CREATE_DIVE uses = named args (not :=); returns id for URL construction
-                  row = con.execute(
-                      "SELECT id, title FROM MD_CREATE_DIVE("
-                      "  title = ?,"
-                      "  content = ?,"
-                      "  description = ?"
-                      ")",
-                      [dive_title, jsx, f"CI build of {', '.join(model_schemas.keys())}"]
-                  ).fetchone()
-                  if row:
-                      dive_id, _t = row[0], row[1]
-                      slug = urllib.parse.quote(dive_title, safe="")
-                      dive_url = f"https://app.motherduck.com/dives/{dive_id}/{slug}"
-                      print(f"Dive created: {dive_url}", flush=True)
-                  con.close()
-              except Exception as _e:
-                  print(f"Warning: MD_CREATE_DIVE failed — {_e}", flush=True)
-
-          result = gate_2_result.assemble(db_created, run_results, head_sha, error=build_crash_error, manifest_materializations=manifest_materializations, dive_url=dive_url, db_name=db_name or None, share_creation_failed=share_creation_failed)
+          result = gate_2_result.assemble(db_created, run_results, head_sha, error=build_crash_error, manifest_materializations=manifest_materializations, db_name=db_name or None)
           os.makedirs("reports", exist_ok=True)
           with open("reports/gate-2.json", "w") as f:
               json.dump(result, f, indent=2)

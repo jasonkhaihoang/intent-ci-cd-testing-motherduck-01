@@ -1,15 +1,19 @@
-"""Thin shell — reclaim per-PR MotherDuck databases and Dives (AC-29).
+"""Thin shell — reclaim per-PR MotherDuck databases (AC-29).
 
 Invoked by `database-cleanup.yml` on three triggers:
   - `pull_request_target: synchronize` — CLEANUP_PR_NUMBER + HEAD_SHA set; drops
-    stale per-SHA databases and their Dives for the pushed PR (AC-36, AC-37)
+    stale per-SHA databases for the pushed PR (AC-36)
   - `pull_request_target: closed`      — CLEANUP_PR_NUMBER set; drops all databases
     for the closed PR (AC-29)
   - `schedule` / `workflow_dispatch`   — CLEANUP_PR_NUMBER unset; sweeps orphans
 
-Owns every I/O seam (MotherDuck connection, `gh api` for open-PR list,
-DROP DATABASE / MD_DROP_DIVE execution). Filtering and drop-set derivation
-live in the pure `ci_database` thin interfaces.
+The database is the only reclaimable asset: no share and no Dive is created for it
+(AC-93, VD-5012), so `DROP DATABASE` is unconditional and there is no share-before-
+database ordering to honour.
+
+Owns every I/O seam (MotherDuck connection, `gh api` for open-PR list, DROP DATABASE
+execution). Filtering and drop-set derivation live in the pure `ci_database` thin
+interfaces.
 """
 import json
 import os
@@ -48,7 +52,7 @@ def main() -> None:
     failures: list[tuple[str, str]] = []
 
     if closed_pr_number is not None and head_sha_short:
-        # Synchronize path (AC-36, AC-37): drop stale per-SHA databases and their Dives.
+        # Synchronize path (AC-36): drop this PR's stale per-SHA databases.
         current_db_name = ci_database.derive_ci_database_name(closed_pr_number, head_sha_short)
         drop_list = ci_database.stale_pr_databases(pr_dbs, closed_pr_number, current_db_name)
         trigger = f"synchronize (PR #{closed_pr_number}, keeping {current_db_name})"
@@ -60,16 +64,6 @@ def main() -> None:
         )
 
         for name in drop_list:
-            # VD-3477: share must drop before its database — MotherDuck refuses
-            # DROP DATABASE while a share still references it.
-            share_sql = ci_database.drop_share_sql(name)
-            print(f"  -> {share_sql}", flush=True)
-            try:
-                con.execute(share_sql)
-            except Exception as exc:  # best-effort: log and continue
-                print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
-                failures.append((name, str(exc)))
-
             sql = ci_database.drop_database_sql(name)
             print(f"  -> {sql}", flush=True)
             try:
@@ -77,27 +71,6 @@ def main() -> None:
             except Exception as exc:  # best-effort: log and continue
                 print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
                 failures.append((name, str(exc)))
-
-        # AC-37: delete Dives matching the planned drop list (best-effort; Dive deletion
-        # runs even if a DB drop failed — a Dive without a backing database is harmless).
-        dive_rows = con.execute(ci_database.list_dives_sql()).fetchall()
-        all_dives = [{"id": r[0], "title": r[1]} for r in dive_rows]
-        pr_dives = ci_database.filter_pr_dives(all_dives)
-        dive_ids_to_drop = ci_database.stale_pr_dives(pr_dives, stale_db_names=drop_list)
-
-        print(
-            f"cleanup_runner: pr_dives={len(pr_dives)} stale_dives_to_drop={len(dive_ids_to_drop)}",
-            flush=True,
-        )
-
-        for dive_id in dive_ids_to_drop:
-            sql = ci_database.drop_dive_sql(dive_id)
-            print(f"  -> {sql}", flush=True)
-            try:
-                con.execute(sql)
-            except Exception as exc:  # best-effort: log and continue
-                print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
-                failures.append((dive_id, str(exc)))
 
     else:
         # PR-close or scheduled sweep paths.
@@ -121,16 +94,6 @@ def main() -> None:
         )
 
         for name in drop_list:
-            # VD-3477: share must drop before its database — MotherDuck refuses
-            # DROP DATABASE while a share still references it.
-            share_sql = ci_database.drop_share_sql(name)
-            print(f"  -> {share_sql}", flush=True)
-            try:
-                con.execute(share_sql)
-            except Exception as exc:  # best-effort: log and continue
-                print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
-                failures.append((name, str(exc)))
-
             sql = ci_database.drop_database_sql(name)
             print(f"  -> {sql}", flush=True)
             try:
@@ -138,56 +101,6 @@ def main() -> None:
             except Exception as exc:  # best-effort: log and continue
                 print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
                 failures.append((name, str(exc)))
-
-        # AC-29: drop per-PR Dives alongside databases (list-and-match by title)
-        dive_rows = con.execute(ci_database.list_dives_sql()).fetchall()
-        all_dives = [{"id": r[0], "title": r[1]} for r in dive_rows]
-        pr_dives = ci_database.filter_pr_dives(all_dives)
-        dive_ids_to_drop = ci_database.dives_to_drop(
-            pr_dives=pr_dives,
-            open_pr_numbers=open_pr_numbers,  # [] on PR-close path; unused when closed_pr_number set
-            closed_pr_number=closed_pr_number,
-        )
-
-        print(
-            f"cleanup_runner: pr_dives={len(pr_dives)} dives_to_drop={len(dive_ids_to_drop)}",
-            flush=True,
-        )
-
-        for dive_id in dive_ids_to_drop:
-            sql = ci_database.drop_dive_sql(dive_id)
-            print(f"  -> {sql}", flush=True)
-            try:
-                con.execute(sql)
-            except Exception as exc:  # best-effort: log and continue; appends to shared failures list
-                print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
-                failures.append((dive_id, str(exc)))
-
-        # Orphan-share reconciliation (scheduled sweep only): a share whose name matches the
-        # pr_<N>_<sha> convention but has no live database anywhere is unreachable by every other
-        # cleanup path (all of them key off a currently-existing database name), so this is the
-        # only place that can ever recover it.
-        if closed_pr_number is None:
-            share_rows = con.execute(
-                "SELECT name FROM MD_INFORMATION_SCHEMA.OWNED_SHARES;"
-            ).fetchall()
-            all_share_names = [r[0] for r in share_rows]
-            pr_shares = ci_database.filter_pr_databases(all_share_names)
-            orphan_shares = [n for n in pr_shares if n not in pr_dbs]
-
-            print(
-                f"cleanup_runner: pr_shares={len(pr_shares)} orphan_shares={len(orphan_shares)}",
-                flush=True,
-            )
-
-            for name in orphan_shares:
-                share_sql = ci_database.drop_share_sql(name)
-                print(f"  -> {share_sql}", flush=True)
-                try:
-                    con.execute(share_sql)
-                except Exception as exc:  # best-effort: log and continue
-                    print(f"     FAILED: {exc}", file=sys.stderr, flush=True)
-                    failures.append((name, str(exc)))
 
     if failures:
         sys.exit(1)

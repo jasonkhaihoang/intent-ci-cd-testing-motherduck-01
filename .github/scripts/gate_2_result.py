@@ -22,31 +22,13 @@ def _map_model(result: dict, manifest_materializations: dict[str, str] | None = 
     }
 
 
-def _build_local_dbt_snippet(db_name: str, model_names: list[str]) -> str:
-    """Pure: render a copy-paste dbt snippet pointing at the per-PR MotherDuck database."""
-    parts = db_name.split("_", 2)  # pr_42_abc1234 → ["pr", "42", "abc1234"]
-    pr_num = parts[1] if len(parts) > 1 else ""
-    sha = parts[2] if len(parts) > 2 else ""
-    select = " ".join(model_names)
-    return (
-        f"# Run dbt locally against {db_name}\n"
-        f"# Requires MOTHERDUCK_TOKEN in your environment\n"
-        f"export PR_NUMBER={pr_num}\n"
-        f"export HEAD_SHA_SHORT={sha}\n"
-        f"dbt run --select {select} \\\n"
-        f"  --profiles-dir .github/profiles --profile dbt_motherduck_ci"
-    )
-
-
 def assemble(
     db_created: bool,
     run_results: dict | None,
     head_sha: str,
     error: str | None = None,
     manifest_materializations: dict[str, str] | None = None,
-    dive_url: str | None = None,
     db_name: str | None = None,
-    share_creation_failed: bool = False,
 ) -> dict:
     """Return the gate-2 result dict for render_gate_2_comment().
 
@@ -56,20 +38,24 @@ def assemble(
         head_sha: PR head SHA (short or full; passed through to the renderer).
         error: Non-None string for transport/auth failures (renders as session_error).
         manifest_materializations: Optional {model_name: materialization} fallback.
-        dive_url: MotherDuck Dive URL from MD_CREATE_DIVE SQL (shell-supplied, I/O done).
-        db_name: Per-PR database name (e.g. pr_42_abc1234) used to build local_dbt_snippet.
-        share_creation_failed: True if the CREATE SHARE call (VD-3321) failed after the
-            Dive was created — surfaced as a non-blocking warning (VD-3330), never as a
-            gate failure.
+        db_name: Per-PR database name (e.g. pr_42_abc1234), surfaced in the ci/run comment
+            as an operator correlation handle. No interactive surface is derived from it:
+            the database is reachable by the CI service account alone (AC-93, VD-5012).
     """
     if error is not None:
-        return {
+        result = {
             "overall_status": "error",
             "session_error": error,
             "head_sha": head_sha,
             "clone": {"status": "fail", "models": []},
             "build": {"status": "fail", "models": []},
         }
+        # AC-10: a crash after the clone leaves a real database behind holding whatever
+        # the run built. That is the case the name exists for, so it is named here too —
+        # only a failure before the clone (db_created False) has nothing to name.
+        if db_created and db_name:
+            result["db_name"] = db_name
+        return result
 
     clone_status = "pass" if db_created else "fail"
 
@@ -89,20 +75,11 @@ def assemble(
         "build": {"status": build_status, "models": build_models},
     }
 
-    # AC-10: include developer surfaces only when the DB was created and models were built
-    if db_created and build_models:
-        if dive_url is not None:
-            result["dive_url"] = dive_url
-            # VD-3330: surface a non-blocking warning when the per-PR database's
-            # read-only share (VD-3321) failed to create — never affects
-            # overall_status. Gated on dive_url (not just db_created/build_models)
-            # so this key never appears without the Dive link it qualifies.
-            if share_creation_failed:
-                result["share_creation_failed"] = True
-        model_names = [m["name"] for m in build_models]
-        result["local_dbt_snippet"] = (
-            _build_local_dbt_snippet(db_name, model_names) if db_name else None
-        )
+    # AC-10: name the per-PR database whenever one was created — including on a failed
+    # build, where the database still exists and an operator may need to correlate it to
+    # a CI log. No Dive link and no dbt snippet: nothing but the service account can read it.
+    if db_created and db_name:
+        result["db_name"] = db_name
 
     return result
 

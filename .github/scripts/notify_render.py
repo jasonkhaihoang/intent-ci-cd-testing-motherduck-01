@@ -357,6 +357,24 @@ def _render_shortcut_seeding(report: dict | None) -> str:
     return ""
 
 
+def _ephemeral_database_line(result: dict) -> str:
+    """Render the per-PR database name, or "" when the producer supplied none (AC-10).
+
+    The name is an **operator correlation handle only** — it ties a CI log line to a
+    MotherDuck object. No interactive surface hangs off it: the database is reachable by
+    the CI service account alone (AC-93), so a Dive link or local dbt snippet would point
+    somewhere no reader can go.
+
+    `db_name` is a MotherDuck-only key. This renderer is shared with the Fabric bundle,
+    whose Gate 2 emits no such key — an ephemeral Fabric *workspace* is a different
+    concept with a different lifecycle, and it must not borrow this wording. The
+    contract is enforced, not assumed: see the invariant in
+    tests/unit/domain_pr_review_approval/test_motherduck_no_share_or_dive.py.
+    """
+    db_name = result.get("db_name")
+    return f"\n_Ephemeral database: `{db_name}`_\n" if db_name else ""
+
+
 def render_gate_2(result: dict | None) -> str:
     if not result:
         return ""
@@ -366,11 +384,16 @@ def render_gate_2(result: dict | None) -> str:
     session_error = result.get("session_error")
     if overall == "error" or session_error:
         cause = session_error or result.get("error") or "Session error"
+        # AC-10: name the database here too when the crash happened after the clone —
+        # this is the path with a failure to investigate, so withholding the operator's
+        # correlation handle would be worst exactly where it is most needed.
+        db_line = _ephemeral_database_line(result)
         return (
             f"## Isolated Build (ci/run) ❌\n\n"
             f"**Session error** — Gate 2 could not run.\n\n"
             f"> {cause}\n\n"
             "Re-run the `ci/run` job to retry.\n"
+            f"{db_line}"
         )
 
     head_sha = result.get("head_sha", "")
@@ -436,28 +459,7 @@ def render_gate_2(result: dict | None) -> str:
             + "\n\n</details>\n"
         )
 
-    # AC-10: Developer surfaces (MotherDuck Dive + local dbt snippet)
-    dive_url = result.get("dive_url")
-    local_dbt_snippet = result.get("local_dbt_snippet")
-    if dive_url:
-        dive_line = (
-            f"🔍 **[Explore in MotherDuck Dive]({dive_url})** "
-            "— zero-setup data exploration, no token or install required.\n"
-        )
-        snippet_block = ""
-        if local_dbt_snippet:
-            snippet_block = f"\n🖥️ **Run dbt locally:**\n\n```bash\n{local_dbt_snippet}\n```\n"
-        share_warning = ""
-        if result.get("share_creation_failed"):
-            # VD-3330: share creation (VD-3321) failed after the Dive was created — the
-            # Dive link above still resolves for the CI service account but may not
-            # resolve for the PR author. Non-blocking: Gate 2's pass/fail is unaffected.
-            share_warning = (
-                "\n> ⚠️ **Advisory:** the read-only data share for this PR's database "
-                "failed to create. The Dive link above may not resolve for anyone other "
-                "than the CI service account. Gate signal is unaffected.\n"
-            )
-        sections.append(f"\n### Developer surfaces\n\n{dive_line}{snippet_block}{share_warning}")
+    sections.append(_ephemeral_database_line(result))
 
     return "".join(sections)
 
