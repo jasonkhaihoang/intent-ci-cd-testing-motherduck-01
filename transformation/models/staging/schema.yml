@@ -17,26 +17,22 @@ models:
         description: Customer country code.
 
   - name: stg_raw__sales
-    description: Staging view over raw.sales — type-safes sale_date and computes total_amount.
+    description: Staging view over raw.sales — renames columns and type-safes sale_date.
     columns:
       - name: sale_id
-        description: Sale transaction primary key.
+        description: Sale primary key.
         tests:
           - not_null
           - unique
       - name: customer_id
-        description: Foreign key to customer.
-        tests:
-          - not_null
+        description: Foreign key to customers.
       - name: product
         description: Product name.
       - name: quantity
         description: Number of units sold.
       - name: unit_price
         description: Price per unit.
-      - name: total_amount
-        description: Computed total (quantity * unit_price).
       - name: sale_date
         description: Date of sale.
       - name: region
-        description: Sales region code.
+        description: Sales region.

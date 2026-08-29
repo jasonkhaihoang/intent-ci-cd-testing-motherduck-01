@@ -6,6 +6,8 @@ and reusable without going through the CLI shell.
 import os
 import re
 
+from platform_enum import MOTHERDUCK, PLATFORMS, VALID_PLATFORMS
+
 try:
     import yaml
 except ImportError:
@@ -54,8 +56,10 @@ _KEY_ALIASES = {
     "VD_DOMAIN_PROD_MANIFEST_SOURCE": "prod_manifest_source",
 }
 
-# duckdb-quack is handled below with a specific migration message before this check
-_VALID_PLATFORMS = {"fabric", "motherduck"}
+# duckdb-quack is handled below with a specific migration message before this check.
+# The accepted values are owned by platform_enum (AC-90) so every consumer that branches
+# on platform reads the same set — see docs/design/bundle-manifest-composition/README.md.
+_VALID_PLATFORMS = VALID_PLATFORMS
 
 
 def _translate_config_keys(config: dict) -> dict:
@@ -121,12 +125,12 @@ def parse_ci_config(yaml_str: str) -> dict:
         return {
             "ok": False,
             "config": _translate_config_keys(config),
-            "error": f"Unknown platform: {platform!r}. Valid values: {', '.join(sorted(_VALID_PLATFORMS))}.",
+            "error": f"Unknown platform: {platform!r}. Valid values: {', '.join(PLATFORMS)}.",
             "line_number": None,
             "missing_keys": [],
         }
 
-    required_keys = _MOTHERDUCK_REQUIRED_KEYS if platform == "motherduck" else _FABRIC_REQUIRED_KEYS
+    required_keys = _MOTHERDUCK_REQUIRED_KEYS if platform == MOTHERDUCK else _FABRIC_REQUIRED_KEYS
 
     missing = [k for k in required_keys if k not in config]
     if missing:

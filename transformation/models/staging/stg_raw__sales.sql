@@ -4,14 +4,13 @@ with source as (
 
 renamed as (
     select
-        sale_id,
+        id as sale_id,
         customer_id,
         product,
         quantity,
         unit_price,
-        region,
         cast(sale_date as date) as sale_date,
-        quantity * unit_price as total_amount
+        region
     from source
 )
 

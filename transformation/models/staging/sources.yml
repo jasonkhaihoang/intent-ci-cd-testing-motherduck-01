@@ -19,10 +19,10 @@ sources:
       - name: sales
         description: Raw sales records seeded from sales.csv.
         columns:
-          - name: sale_id
-            description: Sale transaction primary key.
+          - name: id
+            description: Sale primary key.
           - name: customer_id
-            description: Foreign key to customer.
+            description: Foreign key to customers.
           - name: product
             description: Product name.
           - name: quantity
@@ -32,4 +32,4 @@ sources:
           - name: sale_date
             description: Date of sale.
           - name: region
-            description: Sales region code.
+            description: Sales region.
