@@ -16,3 +16,5 @@ renamed as (
 )
 
 select * from renamed
+
+-- VD-5012 validation bump
