@@ -88,12 +88,22 @@ def main(argv: list[str]) -> int:
         manifest = json.loads(_read_text(args.manifest))
         design_metrics = parse_design_sections(design_text)["metrics"]
     except Exception as e:  # gather failure → emit failure status, exit 1
+        # VD-5481 AC-26: print before posting — a status-post failure must
+        # not replace this diagnostic — and to stdout, since the fake-world
+        # harness's act job-status parser only observes stdout.
+        print(f"semantic-model gather failure: {type(e).__name__}: {e}", flush=True)
         _post(args.head_sha, "failure", f"semantic-model error: {type(e).__name__}: {e}")
         _post_pr_comment(args.pr_number, result=None)
         return 1
 
     result = run_semantic_model_gate(manifest, design_metrics)
     has_critical = any(f["severity"] == "critical" for f in result["findings"])
+    if has_critical:
+        # VD-5481 AC-26: _summary() below reduces this to a rule-id list for
+        # the status description; print each finding's actual message too.
+        for finding in result["findings"]:
+            if finding["severity"] == "critical":
+                print(f"semantic-model contract violation [{finding['rule']}]: {finding['message']}", flush=True)
     _post(args.head_sha, "failure" if has_critical else "success", _summary(result))
     _post_pr_comment(args.pr_number, result=result)
     return 1 if has_critical else 0

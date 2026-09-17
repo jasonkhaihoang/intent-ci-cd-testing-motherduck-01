@@ -75,57 +75,6 @@ def post_or_log(marker: str, body: str, pr_number: str | None, repo: str | None)
         print(f"Failed to post PR comment: {e}", flush=True)
 
 
-def select_trusted_comment(comments: list[dict], marker: str, trusted_author: str) -> str | None:
-    """Return the body of the last comment matching `marker` AND authored by
-    `trusted_author`, or None.
-
-    A marker-matching comment from any other account is ignored, not returned —
-    this is what prevents an untrusted PR author from forging trusted metadata
-    by posting their own marker-matching comment. Last-match-wins: if
-    `trusted_author` posts more than once, the most recent post supersedes
-    earlier ones.
-    """
-    match = None
-    for comment in comments:
-        if marker not in comment.get("body", ""):
-            continue
-        if comment.get("user", {}).get("login") != trusted_author:
-            continue
-        match = comment["body"]
-    return match
-
-
-def _fetch_all_comments(pr_number: str, repo: str) -> list[dict]:
-    """Fetch every comment on a PR, paginated. Never raises: on gh failure or
-    malformed JSON, prints a warning and returns whatever was accumulated so far.
-    """
-    comments: list[dict] = []
-    page = 1
-    while True:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments",
-             "-f", f"page={page}", "-f", "per_page=100"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            print(f"Warning: failed to fetch PR comments (page {page}): {result.stderr}", file=sys.stderr)
-            return comments
-        try:
-            page_comments = json.loads(result.stdout) if result.stdout.strip() else []
-        except json.JSONDecodeError:
-            print(f"Warning: could not parse PR comments JSON (page {page}).", file=sys.stderr)
-            return comments
-        comments.extend(page_comments)
-        if len(page_comments) < 100:
-            return comments
-        page += 1
-
-
-def find_trusted_comment(marker: str, pr_number: str, repo: str, trusted_author: str) -> str | None:
-    """Fetch all PR comments and return the trusted match for `marker`, or None."""
-    return select_trusted_comment(_fetch_all_comments(pr_number, repo), marker, trusted_author)
-
-
 def post_gate_comment(report_path, render_fn, marker, pr_number, repo, real_work_result=None):
     """Load a gate's report JSON (if present) and upsert its PR comment.
 

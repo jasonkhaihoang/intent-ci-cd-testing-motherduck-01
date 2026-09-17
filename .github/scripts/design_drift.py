@@ -19,6 +19,12 @@ Finding kinds:
 
 Malformed LLM responses produce a deterministic single-finding result of
 kind="malformed_llm_response" — the function never raises.
+
+Detection itself — whether the LLM's verdict is *correct* for a given
+design.md/manifest pair — is the LLM's job and is covered by evals
+(VD-5043), not by tests/unit/domain_pr_review_approval/test_design_drift.py.
+That file only verifies this module's passthrough/validation contract:
+a well-formed verdict returned unmodified, a malformed one falling closed.
 """
 from __future__ import annotations
 

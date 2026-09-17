@@ -283,7 +283,7 @@ jobs:
         run: |
           DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
-          pip install ruff sqlfluff pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
+          pip install ruff sqlfluff sqlfluff-templater-dbt pyyaml "dbt-core>=1.8" "dbt-duckdb" "duckdb==${DUCKDB_VERSION}" --quiet
           case "$(uname -m)" in
             arm64|aarch64) GITLEAKS_ARCH=linux_arm64 ;;
             *)              GITLEAKS_ARCH=linux_x64 ;;
@@ -315,7 +315,43 @@ jobs:
 
       - name: ruff
         continue-on-error: true
-        run: ruff check . --extend-exclude .github --output-format json > reports/ruff.json 2>/dev/null
+        run: ruff check . --extend-exclude .github,ingestion/sources --output-format json > reports/ruff.json 2>/dev/null
+
+      - name: Prepare dbt-aware SQL linting
+        continue-on-error: true
+        env:
+          SQLFLUFF_DBT_PROFILE: dbt_motherduck_compile
+          SQLFLUFF_DBT_TARGET: compile
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet 2>/dev/null || true
+          python3 - <<'PYEOF'
+          import configparser
+          import os
+
+          sqlfluff_path = os.path.join(os.environ["PROJ"], ".sqlfluff")
+          config = configparser.RawConfigParser()
+          config.read(sqlfluff_path)  # no-op if the file doesn't exist — never clobbers an
+                                       # existing domain-repo .sqlfluff's other settings.
+          existing_sqlfluff = dict(config["sqlfluff"]) if config.has_section("sqlfluff") else {}
+          config["sqlfluff"] = {**existing_sqlfluff, "templater": "dbt"}
+          # Preserve any other dbt-templater key the domain repo set (e.g.
+          # dbt_skip_compilation, templater context vars) — override only the
+          # four coordinates Gate 0 owns.
+          existing_dbt = (
+              dict(config["sqlfluff:templater:dbt"])
+              if config.has_section("sqlfluff:templater:dbt")
+              else {}
+          )
+          config["sqlfluff:templater:dbt"] = {
+              **existing_dbt,
+              "profiles_dir": ".github/profiles",
+              "profile": os.environ["SQLFLUFF_DBT_PROFILE"],
+              "target": os.environ["SQLFLUFF_DBT_TARGET"],
+              "project_dir": os.environ["PROJ"],
+          }
+          with open(sqlfluff_path, "w") as f:
+              config.write(f)
+          PYEOF
 
       - name: sqlfluff
         continue-on-error: true
@@ -333,7 +369,6 @@ jobs:
       - name: dbt scorecard
         continue-on-error: true
         run: |
-          dbt deps --project-dir "$PROJ" --quiet 2>/dev/null || true
           dbt compile \
             --project-dir "$PROJ" \
             --profiles-dir .github/profiles \
@@ -1060,6 +1095,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA_SHORT: ${{ github.event.pull_request.head.sha }}
+          DOMAIN_SLUG: ${{ needs.preflight.outputs.domain }}
         run: |
           python3 - <<'EOF'
           import os, shutil, sys
@@ -1068,9 +1104,10 @@ jobs:
 
           pr_number = int(os.environ["PR_NUMBER"])
           head_sha_short = os.environ["HEAD_SHA_SHORT"][:7]
+          domain_slug = os.environ["DOMAIN_SLUG"]
           prod_db_name = "prd"
 
-          db_name = ci_database.derive_ci_database_name(pr_number, head_sha_short)
+          db_name = ci_database.derive_ci_database_name(domain_slug, pr_number, head_sha_short)
 
           fake_dir = os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR")
           if fake_dir:
@@ -1110,6 +1147,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DB_NAME: ${{ steps.clone-db.outputs.db_name }}
+          DOMAIN_SLUG: ${{ needs.preflight.outputs.domain }}
         run: |
           python3 - <<'EOF'
           import os, sys
@@ -1126,23 +1164,17 @@ jobs:
 
           pr_number = int(os.environ["PR_NUMBER"])
           current_db_name = os.environ["DB_NAME"]
+          domain_slug = os.environ["DOMAIN_SLUG"]
           token = os.environ["MOTHERDUCK_TOKEN"]
 
           con = duckdb.connect(f"md:?motherduck_token={token}")
           rows = con.execute("SHOW DATABASES;").fetchall()
           all_db_names = [r[0] for r in rows]
-          stale = ci_database.stale_pr_databases(all_db_names, pr_number=pr_number, current_db_name=current_db_name)
+          stale = ci_database.stale_pr_databases(
+              all_db_names, domain_slug=domain_slug, pr_number=pr_number, current_db_name=current_db_name
+          )
           print(f"Stale databases to drop: {stale}", flush=True)
           for name in stale:
-              # VD-3477: share must drop before its database — MotherDuck refuses
-              # DROP DATABASE while a share still references it.
-              share_sql = ci_database.drop_share_sql(name)
-              print(f"  -> {share_sql}", flush=True)
-              try:
-                  con.execute(share_sql)
-              except Exception as exc:
-                  print(f"     WARNING: DROP SHARE failed (best-effort) — {exc}", file=sys.stderr, flush=True)
-
               sql = ci_database.drop_database_sql(name)
               print(f"  -> {sql}", flush=True)
               try:
@@ -1268,56 +1300,7 @@ jobs:
           except (OSError, json.JSONDecodeError):
               pass
 
-          # AC-10: create the Dive when the DB was created and models were built
-          dive_url = None
-          share_creation_failed = False
-          model_schemas = ci_database.extract_model_schemas(run_results)
-          if db_created and db_name and model_schemas:
-              try:
-                  import duckdb, urllib.parse
-                  fake_dir = os.environ.get("FAKE_WORLD_LOCAL_DUCKDB_DIR")
-                  if fake_dir:
-                      con = duckdb.connect(os.path.join(fake_dir, f"{db_name}.duckdb"))
-                  else:
-                      token = os.environ["MOTHERDUCK_TOKEN"]
-                      con = duckdb.connect(f"md:{db_name}?motherduck_token={token}")
-
-                  # AC-10 extension (VD-3321): org-scoped read-only share so a PR author who
-                  # isn't the owning service account can view the Dive without manual ATTACH.
-                  # CREATE OR REPLACE SHARE returns the share's URL in its own result row — no
-                  # second lookup query needed.
-                  share_url = None
-                  try:
-                      share_row = con.execute(ci_database.create_share_sql(db_name)).fetchone()
-                      share_url = share_row[0] if share_row else None
-                  except Exception as _se:
-                      print(f"Warning: CREATE SHARE failed — {_se}", flush=True)
-                  # VD-3330: catches both a raised exception (share_url stays None above)
-                  # and a "succeeded but no usable URL" result row — either way the Dive
-                  # link below won't auto-attach for a non-owner viewer.
-                  share_creation_failed = share_url is None
-
-                  dive_title = f"CI build {db_name}"
-                  jsx = ci_database.build_dive_jsx(db_name, model_schemas, share_url=share_url)
-                  # MD_CREATE_DIVE uses = named args (not :=); returns id for URL construction
-                  row = con.execute(
-                      "SELECT id, title FROM MD_CREATE_DIVE("
-                      "  title = ?,"
-                      "  content = ?,"
-                      "  description = ?"
-                      ")",
-                      [dive_title, jsx, f"CI build of {', '.join(model_schemas.keys())}"]
-                  ).fetchone()
-                  if row:
-                      dive_id, _t = row[0], row[1]
-                      slug = urllib.parse.quote(dive_title, safe="")
-                      dive_url = f"https://app.motherduck.com/dives/{dive_id}/{slug}"
-                      print(f"Dive created: {dive_url}", flush=True)
-                  con.close()
-              except Exception as _e:
-                  print(f"Warning: MD_CREATE_DIVE failed — {_e}", flush=True)
-
-          result = gate_2_result.assemble(db_created, run_results, head_sha, error=build_crash_error, manifest_materializations=manifest_materializations, dive_url=dive_url, db_name=db_name or None, share_creation_failed=share_creation_failed)
+          result = gate_2_result.assemble(db_created, run_results, head_sha, error=build_crash_error, manifest_materializations=manifest_materializations, db_name=db_name or None)
           os.makedirs("reports", exist_ok=True)
           with open("reports/gate-2.json", "w") as f:
               json.dump(result, f, indent=2)
