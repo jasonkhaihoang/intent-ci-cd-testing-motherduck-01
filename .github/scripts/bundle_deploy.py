@@ -7,7 +7,7 @@ Functional core / imperative shell:
     scans the target for existing destinations, calls `plan_copies`, then executes the copies.
 
 CLI:
-    bundle_deploy.py --platform fabric_lakehouse|motherduck --target <repo-path> [--dry-run]
+    bundle_deploy.py --platform fabric_lakehouse|motherduck|duckdb_local --target <repo-path> [--dry-run]
 """
 from __future__ import annotations
 
@@ -17,14 +17,13 @@ import os
 import shutil
 import sys
 
-from platform_enum import FABRIC_LAKEHOUSE, MOTHERDUCK
+from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, MOTHERDUCK
 
-# Keyed wider than platform_enum.VALID_PLATFORMS: DuckDB-local receives global-common
-# content but runs no CI, so it has no ci-config.yml platform value to validate (D11).
+# Keyed to platform_enum.VALID_PLATFORMS — every validated platform has a bundle dir.
 _BUNDLE_DIRS = {
     FABRIC_LAKEHOUSE: "domain-ci-fabric-bundle",
     MOTHERDUCK: "domain-ci-motherduck-bundle",
-    "duckdb": "domain-ci-duckdb-bundle",
+    DUCKDB_LOCAL: "domain-ci-duckdb-bundle",
 }
 
 # The fixed set of named delivery groups (design D2). Fixed, not derived from which groups

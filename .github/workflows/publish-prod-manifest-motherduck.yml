@@ -1,7 +1,7 @@
 # Publishes the prod dbt manifest artifact on push to main.
-# Uses dbt_motherduck_compile (offline, database: prd) — no live MotherDuck connection required.
+# Uses dbt_motherduck_compile (offline, database: <PROD_DB_NAME>) — no live MotherDuck connection required.
 # Gate 1 of any subsequent PR downloads this artifact as the state:modified+ baseline.
-# See docs/design/MotherDuck/motherduck-ci-workflow-design.md §prod-state-manifest
+# See docs/design/MotherDuck/motherduck-ci-workflow-design.md §prod-state-manifest, §Per-Domain production database name (AC-94, VD-5675)
 name: Publish Prod Manifest (MotherDuck)
 
 on:
@@ -26,6 +26,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Resolve PROD_DB_NAME from ci-config.yml
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          from ci_config import parse_ci_config
+
+          with open(os.environ["CICFG"]) as f:
+              yaml_str = f.read()
+          result = parse_ci_config(yaml_str)
+          if not result["ok"]:
+              print(f"ci-config.yml parse failed: {result['error']}", file=sys.stderr)
+              sys.exit(1)
+          prod_db_name = result["config"]["prod_db_name"]
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              out.write(f"PROD_DB_NAME={prod_db_name}\n")
+          EOF
 
       - name: Install dbt-duckdb
         run: |

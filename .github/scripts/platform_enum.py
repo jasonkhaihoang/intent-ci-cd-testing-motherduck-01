@@ -16,8 +16,9 @@ docs/design/bundle-manifest-composition/README.md § Platform discriminator valu
 
 FABRIC_LAKEHOUSE = "fabric_lakehouse"
 MOTHERDUCK = "motherduck"
+DUCKDB_LOCAL = "duckdb_local"
 
 # Ordered so argparse `choices` and validation error text render deterministically.
-PLATFORMS = (FABRIC_LAKEHOUSE, MOTHERDUCK)
+PLATFORMS = (FABRIC_LAKEHOUSE, MOTHERDUCK, DUCKDB_LOCAL)
 
 VALID_PLATFORMS = frozenset(PLATFORMS)

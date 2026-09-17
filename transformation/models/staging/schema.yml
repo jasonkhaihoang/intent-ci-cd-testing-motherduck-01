@@ -18,6 +18,8 @@ models:
 
   - name: stg_raw__sales
     description: Staging view over raw.sales — renames columns and type-safes sale_date.
+    meta:
+      owner: "@jasonkhaihoang"
     columns:
       - name: sale_id
         description: Sale primary key.

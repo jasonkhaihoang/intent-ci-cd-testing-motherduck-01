@@ -1,6 +1,7 @@
 # MotherDuck Database Cleanup
 #
-# Reclaims per-PR MotherDuck databases (`pr_<N>_<sha>`) via DROP DATABASE.
+# Reclaims per-PR MotherDuck databases (`pr_<domain_safe>_<N>_<sha>`) via DROP DATABASE,
+# scoped to the calling Domain's own namespace (VD-5799).
 #
 # Triggers:
 #   - schedule         — daily orphan sweep (canonical; authoritative)
@@ -34,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       motherduck_token_var: ${{ steps.parse.outputs.motherduck_token_var }}
+      domain_slug: ${{ steps.parse.outputs.domain_slug }}
     steps:
       - uses: actions/checkout@v5
 
@@ -63,6 +65,7 @@ jobs:
           config = result["config"]
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"motherduck_token_var={config.get('MOTHERDUCK_TOKEN_VAR', 'MOTHERDUCK_TOKEN')}\n")
+              out.write(f"domain_slug={config['domain']}\n")
           EOF
 
   cleanup:
@@ -84,6 +87,7 @@ jobs:
       - name: Drop orphaned per-PR MotherDuck databases
         env:
           MOTHERDUCK_TOKEN: ${{ secrets[needs.load-config.outputs.motherduck_token_var] }}
+          DOMAIN_SLUG: ${{ needs.load-config.outputs.domain_slug }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLEANUP_PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}
