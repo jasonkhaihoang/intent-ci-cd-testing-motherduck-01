@@ -31,6 +31,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import uuid
 
 import emit_status
 import notify_render
@@ -69,6 +70,10 @@ def _post_chat_completion(url: str, api_key: str, body: dict) -> dict:
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("content-type", "application/json")
     req.add_header("User-Agent", "python-httpx/0.27.0")
+    # OpenCode Zen's Go-plan gateway rejects any request lacking this header
+    # (MissingSessionID) — a fresh UUID per call satisfies it. Other
+    # OpenAI-compatible providers ignore unrecognized headers.
+    req.add_header("x-opencode-session", str(uuid.uuid4()))
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())
 

@@ -1,9 +1,14 @@
 # dbt-duckdb profiles for the MotherDuck CI bundle.
 #
 # Three profiles ship:
-#   dbt_motherduck_compile — offline, renders database: prd (Gates 0, 1, prod-state publish)
+#   dbt_motherduck_compile — offline, renders database: <PROD_DB_NAME> (Gates 0, 1, prod-state publish)
 #   dbt_motherduck_ci      — live, MotherDuck-backed (Gates 2, 3, 4)
-#   dbt_motherduck_prd     — live, targets prd directly (initial seed, domain-deploy, E2E fixture init)
+#   dbt_motherduck_prd     — live, targets <PROD_DB_NAME> directly (initial seed, domain-deploy, E2E fixture init)
+#
+# PROD_DB_NAME is the Domain's own configured production database (VD_DOMAIN_MOTHERDUCK_DATABASE,
+# AC-94) — every caller of these profiles must set it in the environment before invoking dbt.
+# It is never hardcoded here, so two Domains on one MotherDuck account never resolve to the same
+# database (VD-5675).
 #
 # CI workflows always pass --profiles-dir .github/profiles; no collision with ~/.dbt/profiles.yml.
 
@@ -13,11 +18,11 @@ dbt_motherduck_compile:
     compile:
       type: duckdb
       path: ':memory:'
-      database: prd          # matches MotherDuck production database name
+      database: "{{ env_var('PROD_DB_NAME') }}"          # the Domain's configured production database
       schema: main
       attach:
         - path: ':memory:'
-          alias: prd         # dbt-duckdb>=1.9.4 requires database to match an attach alias when path is :memory:
+          alias: "{{ env_var('PROD_DB_NAME') }}"         # dbt-duckdb>=1.9.4 requires database to match an attach alias when path is :memory:
 
 dbt_motherduck_ci:
   target: ci
@@ -32,5 +37,5 @@ dbt_motherduck_prd:
   outputs:
     prd:
       type: duckdb
-      path: "md:prd?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      path: "md:{{ env_var('PROD_DB_NAME') }}?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
       schema: main

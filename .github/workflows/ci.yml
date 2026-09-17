@@ -32,6 +32,7 @@ jobs:
     outputs:
       domain: ${{ steps.preflight.outputs.domain }}
       intent_slug: ${{ steps.preflight.outputs.intent_slug }}
+      prod_db_name: ${{ steps.preflight.outputs.prod_db_name }}
       motherduck_token_var: ${{ steps.preflight.outputs.MOTHERDUCK_TOKEN_VAR }}
       llm_api_key_var: ${{ steps.preflight.outputs.LLM_API_KEY_VAR }}
       llm_api_url_var: ${{ steps.preflight.outputs.LLM_API_URL_VAR }}
@@ -262,11 +263,13 @@ jobs:
 
   # ─── STATIC ANALYSIS ──────────────────────────────────────────────────────────
   # Gate 0: ruff + sqlfluff + gitleaks + dbt compile + scorecard + schema gate.
-  # dbt compile uses dbt_motherduck_compile (offline, in-memory DuckDB, database: prd).
+  # dbt compile uses dbt_motherduck_compile (offline, in-memory DuckDB, database: <PROD_DB_NAME>).
   static-analysis:
     name: "ci/static-check: static analysis"
     needs: [preflight]
     runs-on: ubuntu-latest
+    env:
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -540,6 +543,8 @@ jobs:
     name: "ci/state-modified+: fetch prod state"
     needs: [preflight]
     runs-on: ubuntu-latest
+    env:
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     outputs:
       greenfield_fallback: ${{ steps.fetch.outputs.greenfield_fallback }}
       platform_error_mode: ${{ steps.fetch.outputs.mode }}
@@ -733,6 +738,8 @@ jobs:
     needs: [preflight, fetch-prod-state]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     permissions:
       contents: read
       statuses: write
@@ -856,6 +863,8 @@ jobs:
     needs: [preflight, design-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     permissions:
       contents: read
       statuses: write
@@ -952,6 +961,8 @@ jobs:
     needs: [preflight, design-drift]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     permissions:
       contents: read
       statuses: write
@@ -1046,6 +1057,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MOTHERDUCK_TOKEN: ${{ secrets[needs.preflight.outputs.motherduck_token_var] }}
+      PROD_DB_NAME: ${{ needs.preflight.outputs.prod_db_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1105,7 +1117,7 @@ jobs:
           pr_number = int(os.environ["PR_NUMBER"])
           head_sha_short = os.environ["HEAD_SHA_SHORT"][:7]
           domain_slug = os.environ["DOMAIN_SLUG"]
-          prod_db_name = "prd"
+          prod_db_name = os.environ["PROD_DB_NAME"]
 
           db_name = ci_database.derive_ci_database_name(domain_slug, pr_number, head_sha_short)
 
