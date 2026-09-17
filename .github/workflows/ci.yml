@@ -1201,6 +1201,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA_SHORT: ${{ steps.clone-db.outputs.head_sha_short }}
+          DOMAIN_SLUG: ${{ needs.preflight.outputs.domain }}
           MOTHERDUCK_TOKEN: ${{ env.MOTHERDUCK_TOKEN }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -1459,6 +1460,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          DOMAIN_SLUG: ${{ needs.preflight.outputs.domain }}
           # MOTHERDUCK_TOKEN is set in $GITHUB_ENV by the prior step and is
           # inherited by the subprocess automatically — no explicit env: entry needed.
         run: |
@@ -1649,6 +1651,7 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           MOTHERDUCK_TOKEN: ${{ secrets[needs.preflight.outputs.motherduck_token_var] }}
+          DOMAIN_SLUG: ${{ needs.preflight.outputs.domain }}
         run: |
           mkdir -p reports
           python3 ${{ env.SCRIPTS }}/gate4_runner.py run-gate \

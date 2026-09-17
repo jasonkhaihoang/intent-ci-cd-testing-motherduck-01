@@ -38,7 +38,7 @@ class _LocalDirConnection:
     """Fake MotherDuck connection over a directory of `<db_name>.duckdb` files
     (ADR 0016) — used only when FAKE_WORLD_LOCAL_DUCKDB_DIR is set, mirroring
     Gate 2's own local-file approximation of `SHOW DATABASES` / `DROP DATABASE`
-    for fake-world coverage (AC-97, VD-5799)."""
+    for fake-world coverage (AC-101, VD-5799)."""
 
     def __init__(self, directory: str):
         self._dir = directory

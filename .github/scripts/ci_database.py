@@ -17,7 +17,7 @@ def _domain_safe(domain_slug: str) -> str:
 def derive_ci_database_name(domain_slug: str, pr_number: int, head_sha_short: str) -> str:
     """Deterministic per-PR database name: pr_{domain_safe}_{pr_number}_{head_sha_short}.
 
-    Carrying `domain_slug` in the name (AC-95) means two Domains sharing one
+    Carrying `domain_slug` in the name (AC-99) means two Domains sharing one
     MotherDuck account never produce the same name for the "same" PR number.
     """
     return f"pr_{_domain_safe(domain_slug)}_{pr_number}_{head_sha_short}"
@@ -27,7 +27,7 @@ def _parse_pr_number(name: str, domain_slug: str) -> int | None:
     """Return `name`'s PR number if it is this Domain's own well-formed per-PR
     database name, else None.
 
-    Prefix-matches `pr_{domain_safe}_` before parsing the suffix (AC-94) — a
+    Prefix-matches `pr_{domain_safe}_` before parsing the suffix (AC-98) — a
     database belonging to a different Domain never reaches the suffix parse,
     regardless of its own PR number or SHA.
     """
@@ -63,7 +63,7 @@ def filter_pr_databases(all_db_names: Iterable[str], domain_slug: str) -> list[s
     """Return only this Domain's well-formed per-PR database names
     (`pr_{domain_safe}_<digits>_<hex>`).
 
-    Prefix-scoped to `domain_slug` (AC-94) — a database created by a different
+    Prefix-scoped to `domain_slug` (AC-98) — a database created by a different
     Domain sharing the same MotherDuck account is excluded before its PR
     number is ever parsed, so a same-numbered PR on another Domain can never
     be matched.

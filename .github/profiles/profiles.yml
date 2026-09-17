@@ -29,7 +29,10 @@ dbt_motherduck_ci:
   outputs:
     ci:
       type: duckdb
-      path: "md:pr_{{ env_var('PR_NUMBER') }}_{{ env_var('HEAD_SHA_SHORT') }}?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      # domain_safe (AC-99, VD-5799): DOMAIN_SLUG with '-' normalised to '_', matching
+      # ci_database.py's _domain_safe exactly so this attaches to the same database
+      # Gate 2's clone step created via ci_database.derive_ci_database_name.
+      path: "md:pr_{{ env_var('DOMAIN_SLUG').replace('-', '_') }}_{{ env_var('PR_NUMBER') }}_{{ env_var('HEAD_SHA_SHORT') }}?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
       schema: main
 
 dbt_motherduck_prd:
