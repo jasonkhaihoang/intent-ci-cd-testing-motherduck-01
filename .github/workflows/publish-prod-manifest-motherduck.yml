@@ -9,6 +9,21 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# AC-17: repo-wide (no ref component) because the resource this protects, dbt-docs-latest, is
+# repo-wide too — a workflow_dispatch off any ref must still serialize against a main push.
+# cancel-in-progress: false means an overlapping run queues rather than being cancelled
+# mid-clobber. `queue: max` (GitHub's larger-queue-depth option, shipped 2026-05-07) is real
+# GitHub syntax but is NOT used here: this repo's fake-world CI harness validates every
+# workflow through a pinned `act` build (v0.2.86) whose bundled schema validator rejects
+# `queue` as an unknown property under `concurrency` and hard-fails the entire workflow set
+# for every deployed bundle -- confirmed live (act's own error: "Unknown Property queue").
+# Accepted residual risk: without queue: max, GitHub's default keeps only the single newest
+# pending run, so a third or later overlapping run could still be dropped rather than queued.
+# Same treatment as this spec's pre-existing accepted concurrency gap (AC-DPL-38).
+concurrency:
+  group: publish-prod-manifest
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -23,7 +38,15 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-python@v5
+      # Matches ci.yml's established convention: actions/setup-python's toolcache is a
+      # Docker volume act shares across separate invocations on the same host, so packages
+      # pip-installed by an earlier fake-world test invocation persist into this one --
+      # confirmed live (a leftover dbt-fabricspark from a prior test made
+      # publish_manifest_release.py's adapter-detection see two candidates instead of one).
+      # Skipping this under FAKE_WORLD and using the image's own system python3 avoids that
+      # shared-volume carryover; real (non-fake-world) runs are unaffected.
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -74,9 +97,26 @@ jobs:
       # read, while `gh run download` needs Actions read and is unreachable from an Intent.
       # Only the selection name is published — the compile target is already the prod
       # database, so this one manifest serves both selection and `--defer --state`.
+      # AC-14..AC-18: cut the immutable per-build release (dbt-manifest-<sha>) before the
+      # dbt-docs-latest step below, so a failure here stops the job before the mutable release
+      # advances. Also writes manifest-source.json into $PROJ/target so the dbt-docs-latest
+      # publish step (next) picks it up as an asset too.
+      # `github.event.after` (falling back to `github.sha` for workflow_dispatch, which has
+      # no `.after`) rather than `github.sha` alone: confirmed live that this repo's
+      # fake-world CI harness's push-event fixture leaves `github.sha` unresolved when the
+      # deployed scratch copy isn't a git repo, silently rendering it empty and shifting
+      # every argument after it. `github.event.after` reads directly from the event JSON
+      # act was given, with no git-repo dependency.
+      - name: Publish immutable per-build manifest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/publish_manifest_release.py "$PROJ/target" \
+            ${{ github.event.after || github.sha }} manifest.json
+
       - name: Publish dbt Docs and prod manifest to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 .github/scripts/publish_dbt_docs_release.py "$PROJ/target" \
-            static_index.html manifest.json
+            static_index.html manifest.json manifest-source.json
