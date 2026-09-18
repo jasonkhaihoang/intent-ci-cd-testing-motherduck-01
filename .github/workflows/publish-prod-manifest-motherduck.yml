@@ -50,6 +50,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Pre-existing gap, found live while validating VD-5839 end-to-end: the very next step
+      # imports `ci_config.py`, which needs pyyaml, but nothing installed it -- every prior
+      # `main` push silently relied on the runner image happening to have it, since real
+      # ci-config.yml files here always parsed as valid YAML on whatever pyyaml version was
+      # already present. Matches ci.yml's own established convention (`pip install pyyaml
+      # --quiet` before the first step that needs it).
+      - name: Install pyyaml
+        run: pip install pyyaml --quiet
+
       - name: Resolve PROD_DB_NAME from ci-config.yml
         run: |
           python3 - <<'EOF'
