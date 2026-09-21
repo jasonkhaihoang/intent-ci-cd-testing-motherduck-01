@@ -75,9 +75,9 @@ not a changed artifact, so `R-04@1`'s coverage is its materialization gate rathe
 - Create: none — this task changes no repository file. Its commit is the `## Execution evidence` line below.
 - Modify: none.
 
-- [ ] **Step 1: Materialize the seed into the sandbox**
+- [x] **Step 1: Materialize the seed into the sandbox**
       Invoke `running-dbt-in-sandbox` to run `dbt seed` against the dev target for the `sales` seed.
-- [ ] **Step 2: Confirm the seed landed as the source relation**
+- [x] **Step 2: Confirm the seed landed as the source relation**
 
 Run: the sandbox-run skill's own `dbt seed --select sales` command against the dev target
 
@@ -86,7 +86,7 @@ Expected: exit 0, with `Completed successfully` and a seed insert reported for `
 `id, customer_id, product, quantity, unit_price, sale_date, region` — matching the `sales` source contract in
 `transformation/models/staging/sources.yml`.
 
-- [ ] **Step 3: Commit the evidence line**
+- [x] **Step 3: Commit the evidence line**
 
 ```bash
 command git add docs/plans/2026-09-21-new-intent-eab282dc.md
@@ -162,7 +162,7 @@ command git commit -m "Add boundary and null-contract tests for stg_sales_flagge
 Append-only — one line per task, in task order, appended only when that task's checkbox flips (artifact on disk
 plus a green deterministic gate).
 
-- [ ] Task 1: pending
+- [x] Task 1: `dbt deps` → exit 0 (5 packages installed; `dbt_packages/` was empty, so the gate could not run without it). Gate `dbt seed --select sales --target dev --warn-error-options '{"error":["NoNodesForSelectionCriteria"]}'` → exit 0, `Completed successfully`, `loaded seed file main.sales` **INSERT 10**; dbt's own output reports destination database `ephm_motherduck_01_new_intent_eab282dc`, schema `main` (the ephemeral sandbox, not `prd`). Relation shape from `SUMMARIZE main.sales`: exactly 7 columns `id, customer_id, product, quantity, unit_price, sale_date, region` — matching the `sales` source contract in `sources.yml` — with `count` 10 and `null_percentage` 0.00 on every column. Source file `transformation/seeds/sales.csv` sha256 `e19c7a1e1889501113307357de2a18b5f9a16c234c04e47cd99f39d79ddb8870`. No repository file changed by this task.
 - [ ] Task 2: pending
 - [ ] Task 3: pending
 
