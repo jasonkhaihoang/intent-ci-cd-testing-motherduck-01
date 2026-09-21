@@ -72,3 +72,50 @@ models:
         description: >-
           True exactly when sale_total is strictly greater than 500, so a sale of exactly 500.00 is
           false. Always true or false, never null, including when sale_total is null.
+
+unit_tests:
+  # NOTE — coverage limitation, proven not assumed: dbt types unit-test fixture literals from the
+  # input relation's column types, so every literal below is compiled to `cast(<value> as INTEGER)`
+  # (see target/compiled/.../test_sale_total_over_500_flags_only_strictly_over_500.sql). The sandbox
+  # `raw.sales.unit_price` is INTEGER because the seed's values are whole dollars, so sub-dollar cases
+  # such as a 499.99 / 500.01 threshold cannot be expressed through this input at all. These fixtures
+  # therefore pin the strict boundary at the exact 500 crossing, which is the boundary the requirement
+  # names (exactly 500.00 is not flagged) and the tightest one this column type admits.
+  - name: test_sale_total_over_500_flags_only_strictly_over_500
+    description: >-
+      Pins the strict threshold from the requirement at the exact 500 crossing: 500 is not flagged, so
+      an implementation using >= fails, and 501 is. The 2 x 300 row is flagged true although its
+      unit_price (300) is below the threshold, which fails an implementation that compares unit_price
+      instead of the derived quantity * unit_price. Sub-dollar boundaries are not expressible here —
+      see the note above this block.
+    model: stg_sales_flagged
+    given:
+      - input: source('raw', 'sales')
+        rows:
+          - {id: 1, customer_id: 1, product: 'Widget A', quantity: 5, unit_price: 100, sale_date: '2024-01-01', region: 'US'}
+          - {id: 2, customer_id: 1, product: 'Widget A', quantity: 1, unit_price: 501, sale_date: '2024-01-02', region: 'US'}
+          - {id: 3, customer_id: 1, product: 'Widget A', quantity: 2, unit_price: 300, sale_date: '2024-01-03', region: 'US'}
+          - {id: 4, customer_id: 1, product: 'Widget A', quantity: 3, unit_price: 166, sale_date: '2024-01-04', region: 'US'}
+    expect:
+      rows:
+        - {sale_id: 1, sale_total: 500, is_over_500: false}
+        - {sale_id: 2, sale_total: 501, is_over_500: true}
+        - {sale_id: 3, sale_total: 600, is_over_500: true}
+        - {sale_id: 4, sale_total: 498, is_over_500: false}
+
+  - name: test_null_measure_yields_false_flag_and_null_sale_total
+    description: >-
+      Pins the never-null flag contract on a null input: a row whose quantity is null keeps a null
+      sale_total but carries a flag of false, never null. A bare `sale_total > 500` comparison would
+      return null here and fail. The second row keeps the fixture's quantity column type inferable
+      and shows a present measure still evaluating normally in the same scenario.
+    model: stg_sales_flagged
+    given:
+      - input: source('raw', 'sales')
+        rows:
+          - {id: 1, customer_id: 1, product: 'Widget A', quantity: null, unit_price: 600, sale_date: '2024-01-01', region: 'US'}
+          - {id: 2, customer_id: 1, product: 'Widget A', quantity: 1, unit_price: 499, sale_date: '2024-01-02', region: 'US'}
+    expect:
+      rows:
+        - {sale_id: 1, sale_total: null, is_over_500: false}
+        - {sale_id: 2, sale_total: 499, is_over_500: false}
