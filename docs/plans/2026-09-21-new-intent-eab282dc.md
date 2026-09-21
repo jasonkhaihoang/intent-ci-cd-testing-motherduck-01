@@ -103,12 +103,12 @@ command git commit -m "Materialize the sales seed in the sandbox"
 - Modify: `transformation/models/staging/schema.yml` (add the model's entry: description, columns, and the
   `not_null` / `unique` tests on `sale_id`)
 
-- [ ] **Step 1: Generate the model**
+- [x] **Step 1: Generate the model**
       Invoke `generating-dbt-model` for the `stg_sales_flagged` row. It writes the SQL selecting from
       `{{ source('raw','sales') }}` and exposes `sale_total` as `quantity * unit_price` plus `is_over_500` as a
       `case` that returns `true` or `false`, per D-02, D-03, D-04 and D-10, and adds the model's properties to
       `schema.yml`.
-- [ ] **Step 2: Build the model in the sandbox**
+- [x] **Step 2: Build the model in the sandbox**
       Invoke `running-dbt-in-sandbox` to build it against the dev target.
 
 Run: the sandbox-run skill's own `dbt build --select stg_sales_flagged` command against the dev target
@@ -118,7 +118,7 @@ checks on the built relation: **10** rows — one per source sale, no source row
 `is_over_500 = true` (`sale_id` 8 and 10, at 600.00 and 540.00); 1 row with `is_over_500 = false` at exactly
 500.00 (`sale_id` 6); the remaining 7 false; and `is_over_500` null in 0 rows.
 
-- [ ] **Step 3: Commit the model and its properties together**
+- [x] **Step 3: Commit the model and its properties together**
 
 ```bash
 command git add transformation/models/staging/stg_sales_flagged.sql transformation/models/staging/schema.yml
@@ -163,7 +163,7 @@ Append-only — one line per task, in task order, appended only when that task's
 plus a green deterministic gate).
 
 - [x] Task 1: `dbt deps` → exit 0 (5 packages installed; `dbt_packages/` was empty, so the gate could not run without it). Gate `dbt seed --select sales --target dev --warn-error-options '{"error":["NoNodesForSelectionCriteria"]}'` → exit 0, `Completed successfully`, `loaded seed file main.sales` **INSERT 10**; dbt's own output reports destination database `ephm_motherduck_01_new_intent_eab282dc`, schema `main` (the ephemeral sandbox, not `prd`). Relation shape from `SUMMARIZE main.sales`: exactly 7 columns `id, customer_id, product, quantity, unit_price, sale_date, region` — matching the `sales` source contract in `sources.yml` — with `count` 10 and `null_percentage` 0.00 on every column. Source file `transformation/seeds/sales.csv` sha256 `e19c7a1e1889501113307357de2a18b5f9a16c234c04e47cd99f39d79ddb8870`. No repository file changed by this task.
-- [ ] Task 2: pending
+- [x] Task 2: Created `transformation/models/staging/stg_sales_flagged.sql` (sha256 `a48a9e4b55020262f0ae7a18803d274ed16293a3831a25c0f510aac1bfad666b`) and added the model's entry to `transformation/models/staging/schema.yml` (sha256 `102ea8249934c9ac5595d5bd9834a64529d79ba166c9e9f4d37cfc36db927da2`). Generation check `dbt compile --select stg_sales_flagged --target dev --warn-error-options '{"error":["NoNodesForSelectionCriteria"]}'` → exit 0, resolved relation `"ephm_motherduck_01_new_intent_eab282dc"."main"."stg_sales_flagged"` in the manifest — the sandbox database, not `prd`. Manifest identity: `resource_type` model, `original_file_path` `models/staging/stg_sales_flagged.sql`, `schema` main, `materialized` view, `access` protected, contract `enforced: false` (correct for staging), 9 described columns, `depends_on.nodes` = `['source.motherduck_domain_01.raw.sales']` — the source directly, never `stg_raw__sales`, per D-05. Nested-Jinja check `grep -nE '\{[{%][^}]*\{[{%]'` → no match. Gate `dbt build --select stg_sales_flagged --target dev --defer --state /cache/prod-target --warn-error-options '{"error":["NoNodesForSelectionCriteria"]}'` → **exit 0**, `Completed successfully`, `PASS=5 WARN=0 ERROR=0`, `OK created sql view model main.stg_sales_flagged`, and both `not_null` / `unique` on `sale_id` PASS. Independent checks on the built relation (one query joining it to its source): 10 rows, 10 distinct `sale_id`, `is_over_500` true in 2 rows (`sale_id` 8 and 10), false in 8, **null in 0**; exactly one row at `sale_total` 500.00 and it is **false** (strict `>` boundary held); 0 rows differing from an independent recalculation of `quantity * unit_price > 500` against the source; 0 source rows dropped and 0 extra rows, so the population is 1:1. **Gate-command note (root-caused, not worked around):** the first two runs of the literal gate exited 2 on the Elementary package's own `on-run-end` hook with `Catalog Error: Table with name dbt_artifacts_hashes does not exist!`; the failure reproduced identically on the untouched `stg_raw__sales`, so it is unrelated to this intent. Root cause: `elementary.upload_dbt_artifacts()` calls `elementary.get_artifacts_hashes()`, which guards on the relation existing and then queries it — and Elementary's own 32 models are never materialized in a sandbox, so the table is absent. Fixed in the sandbox only, with no repository change, by `dbt run --select package:elementary --target dev` (exit 0, PASS=32), after which the unmodified gate command exits 0. No project config, profile, or adapter was edited to make the gate pass; note that this domain's `dbt_project.yml` carries no `disable_dbt_artifacts_autoupload` / `disable_run_results` vars, which Studio's templates set elsewhere, and this domain's own CI determines pass/fail from `target/run_results.json` rather than dbt's exit code (`dbt run ... || true`).
 - [ ] Task 3: pending
 
 ## Approvals

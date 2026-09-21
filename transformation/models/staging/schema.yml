@@ -38,3 +38,37 @@ models:
         description: Date of sale.
       - name: region
         description: Sales region.
+
+  - name: stg_sales_flagged
+    description: >-
+      One row per sale, 1:1 with raw.sales — every source row is retained and none is filtered.
+      Adds a derived sale_total (quantity * unit_price) and a never-null is_over_500 flag that is
+      true exactly when sale_total is strictly greater than 500.
+    config:
+      access: protected
+    columns:
+      - name: sale_id
+        description: Sale primary key, from raw.sales.id.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: Foreign key to customers.
+      - name: product
+        description: Product name.
+      - name: quantity
+        description: Number of units sold.
+      - name: unit_price
+        description: Price per unit.
+      - name: sale_date
+        description: Date of sale.
+      - name: region
+        description: Sales region.
+      - name: sale_total
+        description: >-
+          Value of the sale — quantity * unit_price. Computed in this model and never read from the
+          source, which holds no sale-total column under any name. Null when either input is null.
+      - name: is_over_500
+        description: >-
+          True exactly when sale_total is strictly greater than 500, so a sale of exactly 500.00 is
+          false. Always true or false, never null, including when sale_total is null.
