@@ -102,5 +102,5 @@ Technical decisions for Design — never asked at intent:
 
 ## Approvals
 
-- Pending — no requirement approval recorded yet.
+- 2026-09-21T08:34:45Z — **Requirement approved.** Reviewed set: `R-01@1, R-02@1, R-03@1, R-04@1`. Decision: approved, with continuation to `designing` accepted. Response source: the structured intent-approval question this session, option `approved_continue`. This is Requirement approval only — the design stop is separate and is **not** waived (`waive_design_stop` is absent).
 - **Ship authorization was not carried over.** The earlier instruction "Ship it once it's good to go" was attached to the superseded `stg_orders_flagged` request, and the user replaced that request without repeating it. Shipping is therefore unauthorized by the current request and will be asked for at the ship stop, which is a hard stop.
