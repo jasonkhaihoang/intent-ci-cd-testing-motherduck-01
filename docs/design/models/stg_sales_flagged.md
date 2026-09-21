@@ -65,6 +65,14 @@ threshold outcome, so a consumer that wants only flagged sales filters downstrea
 user named the artifact explicitly, so the supplied name is kept rather than normalized. Cites
 `docs/requirement/2026-09-21-new-intent-eab282dc.md#R-01 rev 1`.
 
+`D-10`: **`sale_total` is left uncoerced and is null when either input is null** — it is the plain product
+`quantity * unit_price`, not `coalesce`d to zero. The source columns are declared `NOT NULL`, so no row is
+expected to carry a null input; but coercing an unknown value to `0` would assert "this sale was worth nothing",
+which is a different and worse claim than an honest null, and it would silently pull such a row below the
+threshold. The flag is unaffected either way, because the null-comparison semantics in `D-04` already resolve a
+null product to `false`, so the never-null flag contract holds without this column being coerced. Cites
+`docs/requirement/2026-09-21-new-intent-eab282dc.md#R-02 rev 1`.
+
 ## Rejected
 
 - **Placing the flag in a mart.** The layering convention points that way, but the user asked for a staging
@@ -126,3 +134,6 @@ known consumers today — which is a reason to check the DAG rather than assume 
 - `new-intent-eab282dc`, 2026-09-21 — record created with the model's first design: staging placement, derived
   `sale_total`, strict threshold, never-null flag, direct source dependency, reused staging column contract,
   `is_over_500` naming, mark-don't-filter population, and the supplied model name. Added `D-01`–`D-09`.
+- `new-intent-eab282dc`, 2026-09-21 — `D-10` added after the design review found this column's NULL semantics
+  unrecorded: `sale_total` is left uncoerced and therefore null-preserving, while the flag still resolves to
+  `false` for a null measure. No earlier decision was amended or superseded.
