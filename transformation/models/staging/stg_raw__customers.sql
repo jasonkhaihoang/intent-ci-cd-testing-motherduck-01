@@ -12,5 +12,3 @@ renamed as (
 )
 
 select * from renamed
-
--- VD-6511 validation bump
