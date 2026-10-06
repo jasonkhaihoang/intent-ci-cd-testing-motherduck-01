@@ -11,7 +11,6 @@ identically by both bundles' publish-prod-manifest workflows, immediately before
 """
 import datetime
 import hashlib
-import importlib.metadata
 import json
 import subprocess
 import sys
@@ -25,53 +24,11 @@ from dbt_docs_publish import (
     classify_release_state,
     manifest_release_tag,
 )
+from dbt_version_provenance import resolve_installed_versions
 
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# The only adapter packages either publish workflow ever installs (`pip install "dbt-core>=1.8"
-# "dbt-fabricspark>=1.8" ...` for Fabric / `pip install "dbt-duckdb" ...` for MotherDuck) --
-# an allowlist rather than a blocklist of dbt-core's own transitive non-adapter packages
-# (dbt-common, dbt-adapters, dbt-protos, dbt-core-experimental-parser, ...), because that set
-# is dbt-core's internal implementation detail and changes across dbt-core releases without
-# notice (PR #555 review finding, and confirmed live: an earlier blocklist attempt here
-# false-positived "ambiguous adapter" on this PR's own real CI run when dbt-core pulled in
-# two more transitive packages the blocklist didn't yet know about).
-_KNOWN_ADAPTER_PACKAGES = frozenset({"dbt-fabricspark", "dbt-duckdb"})
-
-
-def _resolve_dbt_versions() -> tuple[str, str, str]:
-    """Return (dbt_version, adapter_name, adapter_version) via installed package metadata.
-
-    `dbt --version` has no stable, documented JSON schema for adapter info on the dbt-core
-    major version these workflows install (`--version --json` is not a real flag; the real
-    one, `--format json`, only documents a bare `{"version": ...}` shape for a newer dbt
-    major). Reading `importlib.metadata` instead avoids depending on either.
-
-    Candidates are collected deterministically (sorted by name) rather than returning
-    whichever `importlib.metadata.distributions()` happens to yield first: a silent,
-    iteration-order-dependent pick would misattribute provenance if a second dbt-*
-    package were ever transitively installed, with no way for a consumer to detect it.
-    Exactly one installed distribution from `_KNOWN_ADAPTER_PACKAGES` is required; zero or
-    more than one is a hard failure rather than a guess.
-    """
-    dbt_version = importlib.metadata.version("dbt-core")
-    candidates = {
-        dist.metadata["Name"]: dist.version
-        for dist in importlib.metadata.distributions()
-        if dist.metadata["Name"] in _KNOWN_ADAPTER_PACKAGES
-    }
-    if not candidates:
-        raise RuntimeError("no dbt adapter package found among installed distributions")
-    if len(candidates) > 1:
-        raise RuntimeError(
-            f"ambiguous dbt adapter: found {len(candidates)} candidate packages "
-            f"{sorted(candidates)!r} -- expected exactly one"
-        )
-    adapter_name = next(iter(candidates))
-    return dbt_version, adapter_name, candidates[adapter_name]
 
 
 def _download_release_asset(tag: str, asset: str, dest) -> None:
@@ -142,7 +99,7 @@ def _gather_release_state(tag: str, target_dir: str, expected_assets: list[str])
 
 def main(target_dir: str, sha: str, asset_names: list[str]) -> int:
     target = Path(target_dir)
-    dbt_version, adapter_name, adapter_version = _resolve_dbt_versions()
+    dbt_version, adapter_name, adapter_version = resolve_installed_versions()
     provenance = {
         "build_sha": sha,
         "published_at": _now_iso(),
@@ -159,10 +116,24 @@ def main(target_dir: str, sha: str, asset_names: list[str]) -> int:
     for cmd in build_manifest_release_commands(state, sha, assets_to_upload):
         subprocess.run(cmd, check=True, cwd=target_dir)
 
-    existing = subprocess.run(
-        ["gh", "release", "list", "--limit", "1000", "--json", "tagName,createdAt"],
-        capture_output=True, check=True,
-    )
+    try:
+        existing = subprocess.run(
+            ["gh", "release", "list", "--limit", "1000", "--json", "tagName,createdAt"],
+            capture_output=True, check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Matches _gather_release_state's existing safety net for `gh release view`: a
+        # bare CalledProcessError with no visible reason is exactly what made three
+        # separate real CI failures on this exact call undiagnosable without guessing
+        # (VD-5839). Print everything available -- stdout included, since a partial
+        # response before a mid-stream failure can also be diagnostic.
+        print(
+            f"gh release list exited {exc.returncode}:\n"
+            f"stderr: {(exc.stderr or b'').decode(errors='replace')}\n"
+            f"stdout: {(exc.output or b'').decode(errors='replace')}",
+            file=sys.stderr,
+        )
+        raise
     releases = [
         (r["tagName"], r["createdAt"])
         for r in json.loads(existing.stdout or b"[]")

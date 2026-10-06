@@ -7,7 +7,8 @@ Functional core / imperative shell:
     scans the target for existing destinations, calls `plan_copies`, then executes the copies.
 
 CLI:
-    bundle_deploy.py --platform fabric_lakehouse|motherduck|duckdb_local --target <repo-path> [--dry-run]
+    bundle_deploy.py --platform fabric_lakehouse|fabric_warehouse|motherduck|duckdb_local
+        --target <repo-path> [--dry-run]
 """
 from __future__ import annotations
 
@@ -17,11 +18,12 @@ import os
 import shutil
 import sys
 
-from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, MOTHERDUCK
+from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, FABRIC_WAREHOUSE, MOTHERDUCK
 
 # Keyed to platform_enum.VALID_PLATFORMS — every validated platform has a bundle dir.
 _BUNDLE_DIRS = {
     FABRIC_LAKEHOUSE: "domain-ci-fabric-bundle",
+    FABRIC_WAREHOUSE: "domain-ci-fabric-warehouse-bundle",
     MOTHERDUCK: "domain-ci-motherduck-bundle",
     DUCKDB_LOCAL: "domain-ci-duckdb-bundle",
 }

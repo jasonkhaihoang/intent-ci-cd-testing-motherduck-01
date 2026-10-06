@@ -82,6 +82,10 @@ def classify_release_state(
     alongside `build_manifest_release_commands` rather than inline branching in the shell
     that gathers `missing`/`differing` — CLAUDE.md's functional-core rule.
     """
+    assert set(missing) <= set(expected_assets), (
+        "missing must be a subset of expected_assets -- the shell can only report an asset "
+        "as missing if it was one this run expected to publish"
+    )
     if not release_exists:
         return "absent"
     if not differing:

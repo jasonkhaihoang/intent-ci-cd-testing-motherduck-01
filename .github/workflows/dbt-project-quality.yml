@@ -58,7 +58,7 @@ jobs:
             --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Install dependencies
-        run: pip install dbt-duckdb dbt-core pyyaml --quiet
+        run: pip install -c .github/managed-constraints.txt dbt-duckdb dbt-core pyyaml --quiet
 
       - name: dbt deps
         run: dbt deps --project-dir "$PROJ" --quiet
