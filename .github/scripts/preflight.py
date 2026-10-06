@@ -33,6 +33,35 @@ def check_auto_merge_disabled(auto_merge_value) -> dict:
     return {"passed": True, "message": "Per-PR auto-merge is disabled."}
 
 
+def check_capacity_access(capacity_id, visible_capacity_ids) -> dict:
+    """Return {passed, message} for the Fabric capacity-grant preflight check (AC-105).
+
+    `visible_capacity_ids` is what `GET /capacities` lists for the CI identity. Creating the
+    ephemeral workspace on a capacity needs permission over that capacity — a grant separate
+    from any workspace role — so a capacity missing from the listing fails here, by name,
+    instead of at provision time as a 403 that reads like a Fabric outage.
+    """
+    wanted = (capacity_id or "").strip()
+    if not wanted:
+        return {
+            "passed": False,
+            "message": (
+                "No Fabric capacity is configured: the repository variable named by "
+                "`FABRIC_CAPACITY_ID_VAR` in ci-config.yml is unset or empty."
+            ),
+        }
+    if wanted.lower() in {str(c).lower() for c in visible_capacity_ids}:
+        return {"passed": True, "message": f"CI identity can use Fabric capacity `{wanted}`."}
+    return {
+        "passed": False,
+        "message": (
+            f"The CI identity has no permission over Fabric capacity `{wanted}`. Creating the "
+            "ephemeral workspace needs a grant on the capacity itself, separate from any "
+            "workspace role — ask a capacity admin to add the CI identity to the capacity."
+        ),
+    }
+
+
 def build_preflight_result(
     branch_name: str,
     yaml_str: str,

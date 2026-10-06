@@ -20,6 +20,49 @@ import runner_io
 # Also handles dbt log-prefixed lines like "16:04:22  Compilation Error in model …"
 _COMPILE_ERROR_RE = re.compile(r"Compilation Error in model (\S+)")
 
+# dbt prefixes most log lines with "HH:MM:SS  "; the error header itself often
+# arrives unprefixed, so both shapes have to normalize to the same text.
+_LOG_PREFIX_RE = re.compile(r"^\d{2}:\d{2}:\d{2}\s+")
+
+# "Parsing Error", "Compilation Error", "Database Error", "Runtime Error" — the
+# header dbt prints before the detail it failed on. Matched as a prefix, not a
+# whole line: dbt writes the header alone for a project-level rejection but
+# appends the node for a model-level one ("Compilation Error in model x (...)"),
+# and both are headers followed by their detail.
+_ERROR_HEADER_RE = re.compile(r"(?:Parsing|Compilation|Database|Runtime) Error")
+
+
+# Closed list of credential shapes that can appear in a dbt error dbt itself
+# prints — a package URL it failed to clone, a profile it failed to open. A
+# commit-status description is readable by anyone with repo read, so these are
+# replaced while the rest of the message survives: a redacted message the reader
+# can still act on beats a generic one they cannot (ADR-0085's human-UI posture).
+_CREDENTIAL_PATTERNS = (
+    # https://user:secret@host, and https://token@host — a token used as the
+    # whole userinfo has no colon, which is the shape `dbt deps` produces for a
+    # git package URL.
+    re.compile(r"//[^/\s:@]+:[^/\s@]+@"),
+    re.compile(r"//[^/\s:@]+@"),
+    # Classic GitHub tokens, and github_pat_, the fine-grained prefix that is
+    # the default for anything minted today.
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    # Secrets carried as query or key=value pairs, including an Azure SAS
+    # signature.
+    re.compile(r"\b(?:motherduck_token|token|password|secret|sig)=\S+", re.IGNORECASE),
+)
+
+
+def _strip_log_prefix(line: str) -> str:
+    return _LOG_PREFIX_RE.sub("", line).strip()
+
+
+def _redact(text: str) -> str:
+    for pattern in _CREDENTIAL_PATTERNS:
+        replacement = "//[REDACTED]@" if pattern.pattern.startswith("//") else "[REDACTED]"
+        text = pattern.sub(replacement, text)
+    return text
+
 
 def _extract_errors_from_summary(failures: list) -> list[dict]:
     """Map parse_run_results failure dicts to [{model, message}] for the error report."""
@@ -51,6 +94,25 @@ def parse_output_errors(output: str) -> list[dict]:
                     break
             errors.append({"model": model, "message": " ".join(msg_lines)})
     return errors
+
+
+def summarize_parse_failure(output: str) -> str:
+    """One line naming why dbt refused to parse the project, for a commit status.
+
+    A gate that cannot parse the project has to say what broke it: "see job
+    logs" leaves the PR reader with a red check and no artifact to look at
+    (VD-5918). Returns "" when the output carries no line dbt itself labelled
+    as an error, so the caller keeps its own generic message rather than
+    inventing a cause — or relaying an arbitrary log line, which the same log's
+    `dbt deps` half can make a credential-bearing one.
+    """
+    lines = [_strip_log_prefix(line) for line in output.splitlines()]
+    for i, line in enumerate(lines):
+        if not _ERROR_HEADER_RE.match(line):
+            continue
+        detail = next((subsequent for subsequent in lines[i + 1:] if subsequent), "")
+        return _redact(f"{line} — {detail}" if detail else line)
+    return ""
 
 
 def main() -> None:

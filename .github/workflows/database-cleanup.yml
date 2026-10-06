@@ -82,7 +82,7 @@ jobs:
         run: |
           DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
-          pip install "duckdb==${DUCKDB_VERSION}" --quiet
+          pip install -c .github/managed-constraints.txt "duckdb==${DUCKDB_VERSION}" --quiet
 
       - name: Drop orphaned per-PR MotherDuck databases
         env:

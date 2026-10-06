@@ -6,7 +6,14 @@ and reusable without going through the CLI shell.
 import os
 import re
 
-from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, MOTHERDUCK, PLATFORMS, VALID_PLATFORMS
+from platform_enum import (
+    DUCKDB_LOCAL,
+    FABRIC_LAKEHOUSE,
+    FABRIC_WAREHOUSE,
+    MOTHERDUCK,
+    PLATFORMS,
+    VALID_PLATFORMS,
+)
 
 try:
     import yaml
@@ -36,6 +43,19 @@ _FABRIC_REQUIRED_KEYS = [
     "VD_DOMAIN_FABRIC_LAKEHOUSE_ID",
 ]
 
+# A Warehouse's coordinates are warehouse-shaped, not lakehouse-shaped, and the NAME
+# is load-bearing rather than cosmetic: the Intent's bridge Lakehouse — and the CI
+# bridge that mirrors it — must carry the Domain Warehouse's name verbatim, because a
+# three-part TDS name records no workspace and only resolves against an item of
+# exactly that name. See docs/design/data-platform/platform-contract.md in vd-studio.
+_FABRIC_WAREHOUSE_REQUIRED_KEYS = [
+    "VD_DOMAIN_SLUG",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_WORKSPACE_ID",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_WORKSPACE_NAME",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_ID",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_NAME",
+]
+
 _MOTHERDUCK_REQUIRED_KEYS = [
     "VD_DOMAIN_SLUG",
     "VD_DOMAIN_MOTHERDUCK_DATABASE",
@@ -52,6 +72,7 @@ _DUCKDB_LOCAL_REQUIRED_KEYS = [
 # (via the dict indexing below) instead of silently inheriting Fabric's keys.
 _REQUIRED_KEYS_BY_PLATFORM = {
     FABRIC_LAKEHOUSE: _FABRIC_REQUIRED_KEYS,
+    FABRIC_WAREHOUSE: _FABRIC_WAREHOUSE_REQUIRED_KEYS,
     MOTHERDUCK: _MOTHERDUCK_REQUIRED_KEYS,
     DUCKDB_LOCAL: _DUCKDB_LOCAL_REQUIRED_KEYS,
 }
@@ -86,6 +107,13 @@ _KEY_ALIASES = {
     "VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME": "prod_workspace_name",
     "VD_DOMAIN_FABRIC_LAKEHOUSE_ID": "prod_lakehouse_id",
     "VD_DOMAIN_FABRIC_LAKEHOUSE_NAME": "prod_lakehouse_name",
+    # No Warehouse entries, on purpose. The Warehouse preflight job reads its
+    # coordinates back under their own VD_DOMAIN_FABRIC_WAREHOUSE_* names (an
+    # untranslated key passes through to GITHUB_OUTPUT unchanged), and its publish
+    # workflow reads ci-config.yml directly, so no consumer needs a legacy name.
+    # A shared alias would also make `_translate_config_keys` lossy for a malformed
+    # config carrying both Fabric kinds' coordinates — two source keys mapping to
+    # one `prod_workspace_id` silently drops whichever comes first.
     "VD_DOMAIN_MOTHERDUCK_DATABASE": "prod_db_name",
     "VD_DOMAIN_CI_DBT_PROFILE": "ci_target",
     "VD_DOMAIN_CI_SPARK_COMPUTE": "spark_compute",

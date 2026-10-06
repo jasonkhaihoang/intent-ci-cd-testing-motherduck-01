@@ -132,6 +132,19 @@ def _section_sqlfluff(report) -> tuple[bool, str]:
     return False, _failed_section("SQLFluff", f"❌ {total} violation(s)", lines, "Per-file breakdown")
 
 
+_SQLFLUFF_STDERR_TAIL_LINES = 20
+
+
+def _section_sqlfluff_missing(stderr: str) -> str:
+    tail = "\n".join(stderr.strip().splitlines()[-_SQLFLUFF_STDERR_TAIL_LINES:])
+    return _failed_section(
+        "SQLFluff",
+        "❌ sqlfluff exited without writing a report",
+        f"```text\n{tail or '(sqlfluff wrote no error output)'}\n```",
+        f"sqlfluff error output (last {_SQLFLUFF_STDERR_TAIL_LINES} lines)",
+    )
+
+
 def _section_gitleaks(report) -> tuple[bool, str]:
     if report is None:
         return True, _passed_section("Gitleaks", "No secrets found")
@@ -1068,10 +1081,13 @@ def render_gate_0_comment(
     gitleaks=None,
     scorecard=None,
     shortcut_seeding=None,
+    sqlfluff_stderr: str | None = None,
     run_url: str = "",
 ) -> str:
     has_gate_0 = bool(compile_result or schema_gate)
-    has_tools = any(x is not None for x in [ruff, sqlfluff, gitleaks, scorecard, shortcut_seeding])
+    has_tools = sqlfluff_stderr is not None or any(
+        x is not None for x in [ruff, sqlfluff, gitleaks, scorecard, shortcut_seeding]
+    )
 
     if not has_gate_0 and not has_tools:
         return f"{GATE_0_MARKER}\n## Static Analysis (ci/static-check) ⚠️\n\n_No data available._\n"
@@ -1084,6 +1100,10 @@ def render_gate_0_comment(
     for tool_id in _STATIC_ANALYSIS_TOOL_IDS:
         value = tool_inputs[tool_id]
         if value is None:
+            if tool_id == "sqlfluff" and sqlfluff_stderr is not None:
+                tool_passed_flags.append(False)
+                tool_table_rows += f"| {_TOOL_RENDERERS[tool_id].name} | {_icon(False)} Report missing — see workflow logs |\n"
+                tool_parts.append(_section_sqlfluff_missing(sqlfluff_stderr))
             continue
         cfg = _TOOL_RENDERERS[tool_id]
         tool_passed, tool_section = cfg.section_fn(value)
@@ -1143,15 +1163,38 @@ def render_gate_1_comment(
         mode = platform_error.get("mode", "artifact")
         category = platform_error.get("category", "")
         reason = platform_error.get("reason", "")
+
+        # version_mismatch/provenance_missing (VD-5832) are not transport failures — the
+        # fetch succeeded, but the baseline fails a parity policy. "Re-run this job" is
+        # actively wrong advice here: a re-run reproduces the identical outcome, since
+        # nothing about the job's inputs changed. Each gets its own banner + remediation.
+        if category in ("version_mismatch", "provenance_missing"):
+            banner = (
+                "> ❌ **Version mismatch** — the baseline's recorded dbt/adapter version could not be installed.\n\n"
+                if category == "version_mismatch"
+                else "> ❌ **Baseline provenance missing** — the prod-state baseline predates dbt/adapter version recording and cannot be checked for parity.\n\n"
+            )
+            remediation = (
+                "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-running this job will "
+                "reproduce the same failure. Republish the baseline instead: trigger `publish-prod-manifest.yml` "
+                "(`workflow_dispatch`) on `main` to publish a baseline with freshly recorded dbt/adapter "
+                "provenance, then push a new commit or re-run this job.\n"
+            )
+        else:
+            banner = "> ❌ **Platform error** — fetching prod state failed.\n\n"
+            remediation = (
+                "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-run this job once the issue is "
+                "resolved, or push a new commit.\n"
+            )
+
         return (
             f"{GATE_1_MARKER}\n"
             f"{heading}\n\n"
-            f"> ❌ **Platform error** — fetching prod state failed.\n\n"
+            f"{banner}"
             f"- Mode: {mode}\n"
             f"- Category: {category}\n"
             f"- Reason: {reason}\n\n"
-            "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-run this job once the issue is resolved, "
-            "or push a new commit.\n"
+            f"{remediation}"
         )
 
     if not passed and not closure:
@@ -1404,6 +1447,7 @@ def render_preflight_comment(result: dict | None) -> str:
     """Render the <!-- ci-preflight --> upserted PR comment section.
 
     Rows always shown: auto-rebase (informational), intent, ci-config.
+    Capacity row added when the report carries one (Fabric lanes, AC-105).
     Violation row added only when auto_merge_disabled check failed.
     """
     if not result:
@@ -1438,6 +1482,12 @@ def render_preflight_comment(result: dict | None) -> str:
             ci_detail = f"{ci_detail} — missing: {formatted}"
 
     rows.append(f"| ci-config | {ci_icon} | {ci_detail} |")
+
+    # Fabric lanes only (AC-105): absent on platforms with no capacity to check.
+    capacity = result.get("capacity")
+    if capacity:
+        capacity_icon = "✅" if capacity.get("passed") else "❌"
+        rows.append(f"| capacity | {capacity_icon} | {_sanitize_table_cell(capacity.get('message', ''))} |")
 
     # Violation row: only shown when auto-merge is enabled (failure case)
     am = result.get("auto_merge_disabled", {})

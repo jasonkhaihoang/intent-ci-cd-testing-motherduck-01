@@ -13,8 +13,14 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
+
+
+# GitHub truncates a longer description; callers that compose one need to know
+# where the cut falls so they can stop somewhere honest rather than mid-word.
+DESCRIPTION_LIMIT = 140
 
 
 def emit_status(repo: str, sha: str, context: str, state: str, description: str, target_url: str) -> None:
@@ -24,7 +30,7 @@ def emit_status(repo: str, sha: str, context: str, state: str, description: str,
     payload = json.dumps({
         "state": state,
         "context": context,
-        "description": description[:140],
+        "description": description[:DESCRIPTION_LIMIT],
         "target_url": target_url,
     }).encode()
     req = urllib.request.Request(
@@ -51,6 +57,87 @@ def emit_status(repo: str, sha: str, context: str, state: str, description: str,
     except urllib.error.URLError as e:
         print(f"Failed to post commit status (network): {e.reason}", file=sys.stderr)
         sys.exit(1)
+
+
+_STATUS_READ_ATTEMPTS = 3
+_STATUS_READ_BACKOFF_SECONDS = 2
+# Eleven own contexts today, but the SHA's statuses are shared with every other
+# app posting on it. The cap bounds the loop by its own count rather than by
+# trusting the continuation link it is following.
+_STATUS_PAGE_LIMIT = 10
+
+
+def _next_page_url(headers) -> str:
+    """The `rel="next"` URL from a Link header, or "" when the page is the last."""
+    link = (headers or {}).get("Link", "") if hasattr(headers, "get") else ""
+    for part in link.split(","):
+        if 'rel="next"' in part and "<" in part and ">" in part:
+            return part[part.index("<") + 1:part.index(">")]
+    return ""
+
+
+def _get_json(url: str, token: str):
+    """GET with a bounded retry, because the caller cannot proceed without it."""
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    for attempt in range(1, _STATUS_READ_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode(errors="replace")), resp.headers
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            if e.code < 500 or attempt == _STATUS_READ_ATTEMPTS:
+                print(f"Failed to read commit statuses: HTTP {e.code} — {detail}", file=sys.stderr)
+                sys.exit(1)
+            reason = f"HTTP {e.code}"
+        except urllib.error.URLError as e:
+            if attempt == _STATUS_READ_ATTEMPTS:
+                print(f"Failed to read commit statuses (network): {e.reason}", file=sys.stderr)
+                sys.exit(1)
+            reason = str(e.reason)
+        print(f"Commit-status read attempt {attempt} failed ({reason}); retrying", file=sys.stderr)
+        time.sleep(_STATUS_READ_BACKOFF_SECONDS * attempt)
+
+
+def fetch_status_states(repo: str, sha: str) -> dict:
+    """The latest state per context already posted for a commit.
+
+    The combined-status endpoint collapses each context to its most recent
+    status, which is exactly the question the sweep asks: does this required
+    context already carry a verdict? Reading it beats inferring one from job
+    results — a job that dies before its runner posts anything concludes as
+    `failure` while its context is still `pending` (VD-5918).
+
+    Exits non-zero rather than returning a partial map: a context missing
+    because the read was truncated is indistinguishable from one that has no
+    verdict, and the caller would post a failure over a gate's own success.
+    """
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+    base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com")
+    url = f"{base_url}/repos/{repo}/commits/{sha}/status?per_page=100"
+
+    states = {}
+    for _ in range(_STATUS_PAGE_LIMIT):
+        body, headers = _get_json(url, token)
+        for status in body.get("statuses", []):
+            states[status["context"]] = status["state"]
+        url = _next_page_url(headers)
+        if not url:
+            return states
+
+    print(
+        f"Commit statuses for {sha} exceed {_STATUS_PAGE_LIMIT} pages; refusing to act on a "
+        "partial read",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def main():
