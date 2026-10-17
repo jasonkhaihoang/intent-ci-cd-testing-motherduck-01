@@ -7,7 +7,8 @@ Functional core / imperative shell:
     scans the target for existing destinations, calls `plan_copies`, then executes the copies.
 
 CLI:
-    bundle_deploy.py --platform fabric_lakehouse|motherduck|duckdb_local --target <repo-path> [--dry-run]
+    bundle_deploy.py --platform fabric_lakehouse|fabric_warehouse|motherduck|duckdb_local
+        --target <repo-path> [--dry-run]
 """
 from __future__ import annotations
 
@@ -17,11 +18,12 @@ import os
 import shutil
 import sys
 
-from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, MOTHERDUCK
+from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, FABRIC_WAREHOUSE, MOTHERDUCK
 
 # Keyed to platform_enum.VALID_PLATFORMS — every validated platform has a bundle dir.
 _BUNDLE_DIRS = {
     FABRIC_LAKEHOUSE: "domain-ci-fabric-bundle",
+    FABRIC_WAREHOUSE: "domain-ci-fabric-warehouse-bundle",
     MOTHERDUCK: "domain-ci-motherduck-bundle",
     DUCKDB_LOCAL: "domain-ci-duckdb-bundle",
 }
@@ -44,7 +46,7 @@ def merge_manifests(common: dict, platform_manifest: dict, platform_name: str) -
     """Merge the common manifest's group-entitled entries with a platform's own entries.
 
     Pure function: no filesystem access. Collects every violation in one pass rather than
-    stopping at the first (AC-BMC-16) — a rejection response names every problem at once.
+    stopping at the first — a rejection response names every problem at once.
     Returns (merged_files, []) on success, or ([], violations) on any violation.
     """
     violations: list[str] = []
@@ -70,7 +72,7 @@ def merge_manifests(common: dict, platform_manifest: dict, platform_name: str) -
     ]
     platform_entries = platform_manifest.get("files", [])
 
-    # AC-BMC-06: same-manifest (platform's own) destination collision.
+    # Same-manifest (platform's own) destination collision.
     seen_platform_dests: dict[str, str] = {}
     for entry in platform_entries:
         dest = entry["destination"]
@@ -80,7 +82,7 @@ def merge_manifests(common: dict, platform_manifest: dict, platform_name: str) -
             )
         seen_platform_dests[dest] = entry["source"]
 
-    # AC-BMC-23: cross-manifest (common vs. platform-specific) destination collision.
+    # Cross-manifest (common vs. platform-specific) destination collision.
     common_dests = {entry["destination"] for entry in filtered_common}
     for entry in platform_entries:
         if entry["destination"] in common_dests:
@@ -135,6 +137,30 @@ def _resolve_sources(bundle: dict, bundle_root: str) -> dict[str, str]:
     return resolved
 
 
+def load_bundle(platform: str, bundle_root: str) -> tuple[dict, list[str]]:
+    """Read and merge `platform`'s manifests: the `{source_roots, files}` bundle to deploy,
+    plus every composition violation (an empty list when the bundle is deployable)."""
+    with open(os.path.join(bundle_root, "shared", "bundle-deploy.json")) as f:
+        common = json.load(f)
+    with open(os.path.join(bundle_root, _BUNDLE_DIRS[platform], "bundle-deploy.json")) as f:
+        platform_manifest = json.load(f)
+    merged_files, violations = merge_manifests(common, platform_manifest, platform)
+    bundle = {
+        "source_roots": platform_manifest.get("source_roots", ["shared", _BUNDLE_DIRS[platform]]),
+        "files": merged_files,
+    }
+    return bundle, violations
+
+
+def shipped_files(platform: str, bundle_root: str) -> dict[str, str]:
+    """Destination → absolute source path of every file `main` deploys for `platform`."""
+    bundle, violations = load_bundle(platform, bundle_root)
+    if violations:
+        raise ValueError(f"{platform} bundle does not compose: {violations}")
+    resolved = _resolve_sources(bundle, bundle_root)
+    return {e["destination"]: os.path.join(bundle_root, resolved[e["source"]]) for e in bundle["files"]}
+
+
 def _existing_destinations(bundle: dict, target_root: str) -> set[str]:
     return {
         entry["destination"]
@@ -161,22 +187,12 @@ def main(argv: list[str], bundle_root: str | None = None) -> int:
     if bundle_root is None:
         bundle_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-    with open(os.path.join(bundle_root, "shared", "bundle-deploy.json")) as f:
-        common = json.load(f)
-    bundle_dir = os.path.join(bundle_root, _BUNDLE_DIRS[args.platform])
-    with open(os.path.join(bundle_dir, "bundle-deploy.json")) as f:
-        platform_manifest = json.load(f)
-
-    merged_files, violations = merge_manifests(common, platform_manifest, args.platform)
+    bundle, violations = load_bundle(args.platform, bundle_root)
     if violations:
         for v in violations:
             print(f"REJECTED: {v}", file=sys.stderr)
         return 1
 
-    bundle = {
-        "source_roots": platform_manifest.get("source_roots", ["shared", _BUNDLE_DIRS[args.platform]]),
-        "files": merged_files,
-    }
     resolved = _resolve_sources(bundle, bundle_root)
     existing = _existing_destinations(bundle, args.target)
     plans = plan_copies(bundle, bundle_root, args.target, existing, resolved)

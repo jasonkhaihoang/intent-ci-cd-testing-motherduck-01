@@ -6,8 +6,8 @@ Queries the DuckDB file written by `dbt build --select dbt_project_evaluator
 category. Posts (or updates) a single PR comment. The results path comes from
 DBT_QUALITY_DUCKDB_PATH — the same env var the dbt-quality profile consumes
 via env_var() — so the writer and this reader cannot drift to different
-filenames (AC-85). A missing/unreadable results database is reported as a
-problem, never rendered as an all-clear (AC-83/84).
+filenames. A missing/unreadable results database is reported as a
+problem, never rendered as an all-clear.
 """
 
 import os
@@ -37,7 +37,7 @@ def query_violations(db_path: str) -> dict[str, list[dict]] | None:
     Returns {category_name: [row_dict, ...]} for models that have rows, or {}
     when the database was read successfully and genuinely has none. Returns
     None when the database is missing or could not be read — that "unread"
-    state must never be confused with a genuinely clean result (AC-83, AC-84).
+    state must never be confused with a genuinely clean result.
     """
     try:
         import duckdb
@@ -135,7 +135,7 @@ def main() -> None:
     pr_number = os.environ.get("PR_NUMBER", "")
     repo = os.environ.get("REPO", "")
     # Required, no fallback: the same env var name the dbt-quality profile
-    # consumes via env_var() (AC-85) — a missing var fails loudly here rather
+    # consumes via env_var() — a missing var fails loudly here rather
     # than silently guessing a path that could drift from the writer again.
     db_path = os.environ["DBT_QUALITY_DUCKDB_PATH"]
 

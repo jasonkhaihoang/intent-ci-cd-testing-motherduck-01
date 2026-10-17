@@ -3,42 +3,44 @@
 Public thin interfaces:
     build_llm_prompt(design_text, manifest, modified_names) -> str
     parse_llm_content(content) -> dict | None
-    run_design_drift(design_text, manifest, modified_names, llm_content) -> dict
+    artifact_findings(record_artifacts, project_model_names) -> list[dict]
+    run_design_drift(design_text, manifest, modified_names, llm_content,
+                     record_artifacts=None) -> dict
 
 Pure: no I/O, no LLM call. The shell (design_drift_runner.py) is responsible
-for reading design.md, loading the manifest, calling the Claude API, and
+for reading the PR's changed model design records, loading the manifest, calling the Claude API, and
 threading the response into run_design_drift as `llm_content`.
 
 Returns:
     {"has_drift": bool, "findings": [{"kind": str, "model": str, "detail": str}, ...]}
 
 Finding kinds:
-    missing_model, extra_model, grain_mismatch, materialization_mismatch,
-    unique_key_mismatch, unexpected_column, missing_column,
-    malformed_llm_response.
+    missing_model, grain_mismatch, decision_violated, malformed_llm_response.
 
 Malformed LLM responses produce a deterministic single-finding result of
 kind="malformed_llm_response" — the function never raises.
 
 Detection itself — whether the LLM's verdict is *correct* for a given
-design.md/manifest pair — is the LLM's job and is covered by evals
-(VD-5043), not by tests/unit/domain_pr_review_approval/test_design_drift.py.
-That file only verifies this module's passthrough/validation contract:
+design-record/manifest pair — is the LLM's job and is covered by evals,
+not by unit tests. Those only verify this module's passthrough/validation contract:
 a well-formed verdict returned unmodified, a malformed one falling closed.
 """
 from __future__ import annotations
 
 import json
 
-_VALID_KINDS = {
-    "missing_model",
-    "extra_model",
-    "grain_mismatch",
-    "materialization_mismatch",
-    "unique_key_mismatch",
-    "unexpected_column",
-    "missing_column",
-}
+from dbt_manifest import Manifest
+
+_VALID_KINDS = {"missing_model", "grain_mismatch", "decision_violated"}
+
+
+def artifact_findings(record_artifacts: set[str], project_model_names: set[str]) -> list[dict]:
+    return [
+        {"kind": "missing_model", "model": name,
+         "detail": "named in a changed model design record's artifacts but no such model "
+                   "exists in the dbt project"}
+        for name in sorted(record_artifacts - project_model_names)
+    ]
 
 
 def _iter_balanced_json_objects(text: str):
@@ -86,8 +88,8 @@ def parse_llm_content(content: str) -> dict | None:
     answer). Returns None if nothing parses as a JSON object; run_design_drift
     feeds that into _validate_llm_response's existing fail-closed path.
 
-    Known, accepted limitations (VD-4532 fix-direction point 3 explicitly
-    accepts this residual risk rather than requiring a full JSON tokenizer):
+    Known, accepted limitations (accepted rather than requiring a full JSON
+    tokenizer):
     this returns the last fragment that *parses*, not necessarily the
     model's actual last-written one — if a complete valid example precedes a
     real answer that gets truncated mid-object, the complete example is
@@ -129,15 +131,19 @@ def build_llm_prompt(design_text: str, manifest: dict, modified_names: list[str]
     }
     kind_enum = ", ".join(sorted(_VALID_KINDS))
     return (
-        "You are a CI gate. Compare the design.md below against the dbt manifest fragment "
-        "for the state:modified models. Report every drift class you can identify.\n\n"
+        "You are a CI gate. The design records below are the durable model design records this "
+        "PR changed (frontmatter artifacts, ## Grain, and append-only D-NN decisions). Compare "
+        "them against the dbt manifest fragment for the state:modified models. Report a "
+        "grain_mismatch when a model's grain differs from its record's Grain, and a "
+        "decision_violated (cite the D-NN in detail) when compiled SQL or config contradicts a "
+        "recorded decision. Do not report anything a record does not state.\n\n"
         "Respond with a single JSON object and nothing else — no prose, no markdown code "
         "fences — of the exact form:\n"
         '{"has_drift": <bool>, "findings": [{"kind": <string>, "model": <string>, '
         '"detail": <string>}, ...]}\n'
         f"Valid values for \"kind\" are exactly: {kind_enum}.\n"
         "If there is no drift, respond with has_drift=false and an empty findings array.\n\n"
-        f"=== design.md ===\n{design_text}\n\n"
+        f"=== design records ===\n{design_text}\n\n"
         f"=== state:modified ===\n{json.dumps(sorted(modified_set))}\n\n"
         f"=== manifest (modified nodes only) ===\n{json.dumps(compact, indent=2)}\n"
     )
@@ -163,24 +169,18 @@ def _validate_llm_response(llm_response: dict) -> dict | None:
     return llm_response
 
 
-def run_design_drift(
-    design_text: str,
-    manifest: dict,
-    modified_names: list[str],
-    llm_content: str,
-) -> dict:
+def run_design_drift(design_text: str, manifest: dict, modified_names: list[str], llm_content: str,
+                     record_artifacts: set[str] | None = None) -> dict:
+    project_models = {n.get("name") for n in Manifest.from_dict(manifest).own_models().values()}
+    deterministic = artifact_findings(set(record_artifacts or ()), project_models)
     parsed = parse_llm_content(llm_content)
     validated = _validate_llm_response(parsed) if parsed is not None else None
     if validated is None:
-        return {
-            "has_drift": True,
-            "findings": [{
-                "kind": "malformed_llm_response",
-                "model": "",
-                "detail": "LLM response did not conform to the required schema.",
-            }],
-        }
+        return {"has_drift": True, "findings": deterministic + [{
+            "kind": "malformed_llm_response", "model": "",
+            "detail": "LLM response did not conform to the required schema.",
+        }]}
     return {
-        "has_drift": validated["has_drift"],
-        "findings": list(validated["findings"]),
+        "has_drift": bool(deterministic) or validated["has_drift"],
+        "findings": deterministic + list(validated["findings"]),
     }

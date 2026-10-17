@@ -1,7 +1,8 @@
 """Thin shell for ci/design-drift (MotherDuck).
 
 gather → call → dispatch:
-  1. Read design.md, manifest.json, modified.json from disk.
+  1. Read the PR's changed paths and the changed model design records (docs/design/models/**),
+     manifest.json, modified.json.
   2. Read LLM_API_KEY, LLM_API_URL, LLM_MODEL from env.
   3. Build prompt; POST to OpenAI-compatible chat completions API with
      response_format=json_object; on HTTP 400 retry once without it;
@@ -13,7 +14,7 @@ All gate logic lives in design_drift.run_design_drift; this module owns only I/O
 
 Usage:
     design_drift_runner.py \\
-        --pr-number 42 --head-sha abc123 --intent-id intent/sales \\
+        --pr-number 42 --head-sha abc123 --changed-paths changed-paths.txt \\
         --manifest target/manifest.json \\
         --modified reports/modified.json
 
@@ -36,7 +37,9 @@ import uuid
 import emit_status
 import notify_render
 import pr_comment
+import design_record_io
 
+from design_records import select_design_records
 from design_drift import build_llm_prompt, run_design_drift
 
 CONTEXT = "ci/design-drift"
@@ -50,16 +53,13 @@ def _read_text(path: str) -> str:
         return f.read()
 
 
-def _design_md_path(intent_id: str) -> str:
-    return f"{intent_id}/design.md"
-
-
 def build_llm_url(api_url: str) -> str:
-    """AC-66: build the chat-completions URL for any LLM_API_URL base-URL shape."""
+    """Build the chat-completions URL for any LLM_API_URL base-URL shape."""
     base = api_url.rstrip("/")
-    if base.endswith("/v1/chat/completions"):
+    if base.endswith("/chat/completions"):
         return base
-    if base.endswith("/v1"):
+    # Databricks serves chat completions directly under /serving-endpoints (no /v1).
+    if base.endswith(("/v1", "/serving-endpoints")):
         return f"{base}/chat/completions"
     return f"{base}/v1/chat/completions"
 
@@ -132,7 +132,7 @@ def _post_pr_comment(pr_number: str, result: dict | None, modified_names: list[s
 
 def _summary(result: dict) -> str:
     if not result["has_drift"]:
-        return "design.md matches state:modified — no drift"
+        return "model design records match state:modified — no drift"
     kinds = sorted({f["kind"] for f in result["findings"]})
     return f"design drift detected: {', '.join(kinds)}"
 
@@ -141,26 +141,39 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pr-number", required=True)
     parser.add_argument("--head-sha", required=True)
-    parser.add_argument("--intent-id", required=True)
+    parser.add_argument("--changed-paths", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--modified", required=True)
     args = parser.parse_args(argv)
 
     try:
-        design_text = _read_text(_design_md_path(args.intent_id))
+        changed = design_record_io.read_changed_paths(args.changed_paths)
+        records = [r for r in select_design_records(changed, design_record_io.read_contents(changed))
+                   if r.kind == "model"]
+        if not records:
+            _post(args.head_sha, "success", "no model design record changed — skipped")
+            _post_pr_comment(args.pr_number, result={"has_drift": False, "skipped": True, "findings": []})
+            return 0
+        design_text = "\n\n".join(f"<!-- {r.path} -->\n{r.text}" for r in records)
+        record_artifacts = {name for r in records for name in r.artifacts}
         manifest = json.loads(_read_text(args.manifest))
         modified_names = json.loads(_read_text(args.modified))
         api_key = os.environ["LLM_API_KEY"]
         api_url = os.environ.get("LLM_API_URL") or DEFAULT_LLM_API_URL
         model = os.environ.get("LLM_MODEL") or DEFAULT_LLM_MODEL
-        prompt = build_llm_prompt(design_text, manifest, modified_names)
+        prompt = build_llm_prompt(design_text, manifest, sorted(set(modified_names) | record_artifacts))
         llm_content = call_llm(api_key, prompt, api_url, model)
     except Exception as e:  # gather/call failure → emit failure status, exit 1
+        # Print before posting: a failed status post must not replace the original diagnostic.
+        print(f"design-drift error: {type(e).__name__}: {e}", flush=True)
         _post(args.head_sha, "failure", f"design-drift error: {type(e).__name__}: {e}")
         _post_pr_comment(args.pr_number, result=None)
         return 1
 
-    result = run_design_drift(design_text, manifest, modified_names, llm_content)
+    result = run_design_drift(design_text, manifest, modified_names, llm_content,
+                              record_artifacts=record_artifacts)
+    for finding in result["findings"]:
+        print(f"design drift: {finding['kind']} {finding['model']}: {finding['detail']}", flush=True)
     _post(args.head_sha, "failure" if result["has_drift"] else "success", _summary(result))
     _post_pr_comment(args.pr_number, result=result, modified_names=modified_names)
     return 1 if result["has_drift"] else 0
