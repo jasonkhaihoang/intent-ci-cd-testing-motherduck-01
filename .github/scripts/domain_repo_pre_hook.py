@@ -12,7 +12,7 @@ _scan_secret_content) are internal — they have no call site outside
 evaluate_publish and are deliberately not exported or tested directly (this
 repo's doctrine: test the thin interface, not decomposed internals).
 
-Design contracts (docs/design/domain-repo-pre-hook/README.md):
+Design contracts:
     DC-1  _classify_path           — path-anchored artifact-class recognition.
                                      Dependency-manager directories (vendored
                                      packages) are matched at any depth, since
@@ -22,7 +22,7 @@ Design contracts (docs/design/domain-repo-pre-hook/README.md):
                                      under it.
     DC-2  _is_secret_filename      — conventional secret-holding filenames
     DC-3  _scan_secret_content     — secret-shaped content, independent of filename
-                                     (VD-4622 extended this with context-independent
+                                     (extended with context-independent
                                      GitHub/Slack/Stripe/Google/JWT patterns and a
                                      bearer-token header pattern; see D5a)
     DC-4  evaluate_publish         — block iff any finding exists
@@ -73,7 +73,7 @@ _SECRET_FILENAME_RE = re.compile(
 # gate, always paired with another signal (their entropy check; here, the
 # keyword prefix + "contains a digit" requirement) — 16 was picked, not
 # derived, and sits within the 10-20 char range those tools use for the same
-# purpose. Per D5 (docs/design/domain-repo-pre-hook/README.md), this hook is
+# purpose. This hook is
 # intentionally the fast/shallow local layer, not entropy-scored like
 # gitleaks — `ci/static-check`'s gitleaks scan is the deeper backstop.
 _SECRET_CONTENT_PATTERNS = [
@@ -85,22 +85,21 @@ _SECRET_CONTENT_PATTERNS = [
     ),
 ]
 
-# VD-4622 (D5a) — context-independent vendor-shaped patterns: matched on the
+# Context-independent vendor-shaped patterns: matched on the
 # value's own shape alone, no keyword neighbor required, the same way AKIA and
-# the PEM header above already work. Realizes AC-DRPH-39..43.
+# the PEM header above already work.
 _VENDOR_SECRET_PATTERNS = [
-    re.compile(rb"gh[pousr]_[A-Za-z0-9]{36}"),  # AC-DRPH-39 — GitHub PAT
-    re.compile(rb"xox[baprs]-[0-9]+-[0-9]+-[A-Za-z0-9]+"),  # AC-DRPH-40 — Slack token
-    re.compile(rb"(sk|pk|rk)_(live|test)_[A-Za-z0-9]{24,}"),  # AC-DRPH-41 — Stripe key
-    re.compile(rb"AIza[0-9A-Za-z_\-]{35}"),  # AC-DRPH-42 — Google API key
-    re.compile(rb"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),  # AC-DRPH-43 — JWT
+    re.compile(rb"gh[pousr]_[A-Za-z0-9]{36}"),  # GitHub PAT
+    re.compile(rb"xox[baprs]-[0-9]+-[0-9]+-[A-Za-z0-9]+"),  # Slack token
+    re.compile(rb"(sk|pk|rk)_(live|test)_[A-Za-z0-9]{24,}"),  # Stripe key
+    re.compile(rb"AIza[0-9A-Za-z_\-]{35}"),  # Google API key
+    re.compile(rb"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),  # JWT
 ]
 
-# VD-4622 (D5a) — bearer-token header shape has no vendor-specific charset of
+# Bearer-token header shape has no vendor-specific charset of
 # its own, so it is the one new pattern that needs its own placeholder guard:
 # a value that looks like a documentation placeholder (all-caps/underscore,
-# or containing `<`, `>`, or a repeated-`x` run) is excluded. Realizes
-# AC-DRPH-44 (required-output) and AC-DRPH-45 (forbidden-state guard).
+# or containing `<`, `>`, or a repeated-`x` run) is excluded.
 _BEARER_TOKEN_RE = re.compile(rb"Bearer\s+([A-Za-z0-9_\-.]{20,})")
 # Literal all-caps/digits/underscore/hyphen (no lowercase) — a real opaque
 # token is virtually never shaped this way, but "YOUR_TOKEN_HERE" and
@@ -110,7 +109,7 @@ _BEARER_TOKEN_RE = re.compile(rb"Bearer\s+([A-Za-z0-9_\-.]{20,})")
 _BEARER_ALL_CAPS_PLACEHOLDER_RE = re.compile(rb"^[A-Z0-9_\-]+$")
 # Accepted residual false-negative (not fixed): a real token containing 4+
 # consecutive x/X characters (plausible in base64/hex) is also exempted by
-# this marker check. Low-probability, same spirit as ADR 0020's other
+# this marker check. Low-probability, same spirit as the other
 # accepted-risk trade-offs for this pattern set.
 _BEARER_MARKER_PLACEHOLDER_RE = re.compile(rb"[<>]|[xX]{4,}")
 

@@ -6,7 +6,14 @@ and reusable without going through the CLI shell.
 import os
 import re
 
-from platform_enum import DUCKDB_LOCAL, FABRIC_LAKEHOUSE, MOTHERDUCK, PLATFORMS, VALID_PLATFORMS
+from platform_enum import (
+    DUCKDB_LOCAL,
+    FABRIC_LAKEHOUSE,
+    FABRIC_WAREHOUSE,
+    MOTHERDUCK,
+    PLATFORMS,
+    VALID_PLATFORMS,
+)
 
 try:
     import yaml
@@ -36,6 +43,19 @@ _FABRIC_REQUIRED_KEYS = [
     "VD_DOMAIN_FABRIC_LAKEHOUSE_ID",
 ]
 
+# A Warehouse's coordinates are warehouse-shaped, not lakehouse-shaped, and the NAME
+# is load-bearing rather than cosmetic: the Intent's bridge Lakehouse — and the CI
+# bridge that mirrors it — must carry the Domain Warehouse's name verbatim, because a
+# three-part TDS name records no workspace and only resolves against an item of
+# exactly that name.
+_FABRIC_WAREHOUSE_REQUIRED_KEYS = [
+    "VD_DOMAIN_SLUG",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_WORKSPACE_ID",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_WORKSPACE_NAME",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_ID",
+    "VD_DOMAIN_FABRIC_WAREHOUSE_NAME",
+]
+
 _MOTHERDUCK_REQUIRED_KEYS = [
     "VD_DOMAIN_SLUG",
     "VD_DOMAIN_MOTHERDUCK_DATABASE",
@@ -52,13 +72,14 @@ _DUCKDB_LOCAL_REQUIRED_KEYS = [
 # (via the dict indexing below) instead of silently inheriting Fabric's keys.
 _REQUIRED_KEYS_BY_PLATFORM = {
     FABRIC_LAKEHOUSE: _FABRIC_REQUIRED_KEYS,
+    FABRIC_WAREHOUSE: _FABRIC_WAREHOUSE_REQUIRED_KEYS,
     MOTHERDUCK: _MOTHERDUCK_REQUIRED_KEYS,
     DUCKDB_LOCAL: _DUCKDB_LOCAL_REQUIRED_KEYS,
 }
 
-# The ADR-0018 indirection block is validated permissively on purpose: an
+# The indirection block is validated permissively on purpose: an
 # unrecognised key passes through so an older repository does not break on a
-# stale one (AC-11 / VD-5013). No `*_VAR` key is required here — a mapping can
+# stale one. No `*_VAR` key is required here — a mapping can
 # be present and correct while the Variable it names is unset, so requiring the
 # key would not catch the real failure anyway. Validating that a named Variable
 # actually resolves needs the workflow to pass `${{ vars[...] }}` in, which is a
@@ -70,15 +91,28 @@ def _is_blank(value) -> bool:
 
     `KEY:` with nothing after it parses as None, and `KEY: ""` as the empty
     string. Both satisfy a presence check while breaking every consumer, which
-    is the shape VD-5156 surfaced from the other direction.
+    is the same failure seen from the other direction.
     """
     return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def require_indirection_key(config: dict, key: str) -> dict:
+    """Return the GitHub Actions name a `*_VAR` indirection key holds, or an error naming the key.
+
+    Pure and deliberately not part of `parse_ci_config`'s validation: that stays permissive about
+    `*_VAR` keys. Callers with no safe default name (the MotherDuck cleanup) use
+    this to fail closed instead of falling back to a literal secret name.
+    """
+    value = config.get(key)
+    if not isinstance(value, str) or _is_blank(value):
+        return {"ok": False, "value": None, "error": f"ci-config.yml must set {key} to a GitHub Actions secret or variable name"}
+    return {"ok": True, "value": value.strip(), "error": None}
 
 
 # Committed coordinate key -> legacy lowercase key every existing downstream
 # consumer (preflight.py's GITHUB_OUTPUT writer, ci.yml's `outputs.*` refs,
 # fabric_api.py) already expects. VD_DOMAIN_SCHEMA has no entry here —
-# confirmed dead (VD-3440 AC-64), dropped rather than renamed.
+# confirmed dead, dropped rather than renamed.
 _KEY_ALIASES = {
     "VD_DOMAIN_DATA_PLATFORM": "platform",
     "VD_DOMAIN_SLUG": "domain",
@@ -86,6 +120,13 @@ _KEY_ALIASES = {
     "VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME": "prod_workspace_name",
     "VD_DOMAIN_FABRIC_LAKEHOUSE_ID": "prod_lakehouse_id",
     "VD_DOMAIN_FABRIC_LAKEHOUSE_NAME": "prod_lakehouse_name",
+    # No Warehouse entries, on purpose. The Warehouse preflight job reads its
+    # coordinates back under their own VD_DOMAIN_FABRIC_WAREHOUSE_* names (an
+    # untranslated key passes through to GITHUB_OUTPUT unchanged), and its publish
+    # workflow reads ci-config.yml directly, so no consumer needs a legacy name.
+    # A shared alias would also make `_translate_config_keys` lossy for a malformed
+    # config carrying both Fabric kinds' coordinates — two source keys mapping to
+    # one `prod_workspace_id` silently drops whichever comes first.
     "VD_DOMAIN_MOTHERDUCK_DATABASE": "prod_db_name",
     "VD_DOMAIN_CI_DBT_PROFILE": "ci_target",
     "VD_DOMAIN_CI_SPARK_COMPUTE": "spark_compute",
@@ -93,8 +134,8 @@ _KEY_ALIASES = {
 }
 
 # duckdb-quack is handled below with a specific migration message before this check.
-# The accepted values are owned by platform_enum (AC-90) so every consumer that branches
-# on platform reads the same set — see docs/design/bundle-manifest-composition/README.md.
+# The accepted values are owned by platform_enum so every consumer that branches
+# on platform reads the same set.
 _VALID_PLATFORMS = VALID_PLATFORMS
 
 

@@ -47,10 +47,16 @@ _FAILURE_CAP = 10
 def _extract_model(unique_id: str) -> str:
     """Extract model name from a dbt unit_test unique_id.
 
+    unit_test.<project>.<model>.<test_name> → <model> (dbt's own shape).
     unit_test.<project>.<model>__<test_name> → <model>.
-    Returns "" for unique_ids that don't contain "__".
+    Returns "" for any other unique_id (e.g. a data test, whose model comes from the manifest).
     """
-    last = unique_id.split(".")[-1]
+    parts = unique_id.split(".")
+    if parts[0] != "unit_test":
+        return ""
+    if len(parts) >= 4:
+        return parts[2]
+    last = parts[-1]
     if "__" not in last:
         return ""
     return last.split("__")[0]

@@ -1,16 +1,16 @@
 # MotherDuck Database Cleanup
 #
 # Reclaims per-PR MotherDuck databases (`pr_<domain_safe>_<N>_<sha>`) via DROP DATABASE,
-# scoped to the calling Domain's own namespace (VD-5799).
+# scoped to the calling Domain's own namespace.
 #
 # Triggers:
 #   - schedule         — daily orphan sweep (canonical; authoritative)
 #   - workflow_dispatch
 #   - pull_request_target: closed      — eager eviction on PR close (best-effort)
-#   - pull_request_target: synchronize — drops stale per-SHA databases + Dives on push (AC-36, AC-37)
+#   - pull_request_target: synchronize — drops stale per-SHA databases + Dives on push
 #
 # pull_request_target always reads this workflow from the default branch,
-# firing reliably for all PRs regardless of when they were opened (VD-2028).
+# firing reliably for all PRs regardless of when they were opened.
 # actions/checkout@v5 defaults to the base-branch ref under this trigger —
 # no untrusted PR code is checked out, so secrets exposure is safe.
 
@@ -53,7 +53,7 @@ jobs:
           import sys
 
           sys.path.insert(0, ".github/scripts")
-          from ci_config import locate_ci_config, parse_ci_config
+          from ci_config import locate_ci_config, parse_ci_config, require_indirection_key
 
           with open(locate_ci_config()) as f:
               result = parse_ci_config(f.read())
@@ -63,8 +63,12 @@ jobs:
               sys.exit(1)
 
           config = result["config"]
+          token = require_indirection_key(config, "MOTHERDUCK_TOKEN_VAR")
+          if not token["ok"]:
+              print(f"::error::{token['error']}")
+              sys.exit(1)
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"motherduck_token_var={config.get('MOTHERDUCK_TOKEN_VAR', 'MOTHERDUCK_TOKEN')}\n")
+              out.write(f"motherduck_token_var={token['value']}\n")
               out.write(f"domain_slug={config['domain']}\n")
           EOF
 
@@ -82,7 +86,7 @@ jobs:
         run: |
           DUCKDB_VERSION=$(curl -fsSL https://motherduck.com/docs/duckdb-versions.json \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['duckdb']['motherduck_regions']['global']['max'])")
-          pip install "duckdb==${DUCKDB_VERSION}" --quiet
+          pip install -c .github/managed-constraints.txt "duckdb==${DUCKDB_VERSION}" --quiet
 
       - name: Drop orphaned per-PR MotherDuck databases
         env:
