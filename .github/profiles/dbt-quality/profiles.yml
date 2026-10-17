@@ -5,7 +5,7 @@
 #
 # path is DBT_QUALITY_DUCKDB_PATH (set in dbt-project-quality.yml's env:) —
 # the same variable dbt_quality_comment.py reads, so the writer and reader
-# cannot drift to different filenames again (VD-4731/AC-85; VD-4735 parity).
+# cannot drift to different filenames again.
 dbt_project_quality_profile:
   outputs:
     dbt_quality:

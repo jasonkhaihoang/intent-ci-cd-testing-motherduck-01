@@ -40,7 +40,7 @@ def assemble(
         manifest_materializations: Optional {model_name: materialization} fallback.
         db_name: Per-PR database name (e.g. pr_42_abc1234), surfaced in the ci/run comment
             as an operator correlation handle. No interactive surface is derived from it:
-            the database is reachable by the CI service account alone (AC-93, VD-5012).
+            the database is reachable by the CI service account alone.
     """
     if error is not None:
         result = {
@@ -50,7 +50,7 @@ def assemble(
             "clone": {"status": "fail", "models": []},
             "build": {"status": "fail", "models": []},
         }
-        # AC-10: a crash after the clone leaves a real database behind holding whatever
+        # A crash after the clone leaves a real database behind holding whatever
         # the run built. That is the case the name exists for, so it is named here too —
         # only a failure before the clone (db_created False) has nothing to name.
         if db_created and db_name:
@@ -75,7 +75,7 @@ def assemble(
         "build": {"status": build_status, "models": build_models},
     }
 
-    # AC-10: name the per-PR database whenever one was created — including on a failed
+    # Name the per-PR database whenever one was created — including on a failed
     # build, where the database still exists and an operator may need to correlate it to
     # a CI log. No Dive link and no dbt snippet: nothing but the service account can read it.
     if db_created and db_name:
@@ -90,7 +90,7 @@ def decide_commit_status(result: dict | None) -> tuple[str, str]:
     Fails closed: anything other than a well-formed result with
     overall_status == "pass" reports failure — including a missing/malformed
     result, which happens if the job crashed before assemble() ran. The
-    ci/run status must never default to success on silence (VD-3322).
+    ci/run status must never default to success on silence.
     """
     if isinstance(result, dict) and result.get("overall_status") == "pass":
         return "success", "Gate 2: dbt build passed"

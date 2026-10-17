@@ -3,11 +3,9 @@
 CLI:
     adr_lint.py --pr-number <N>
 
-Reads GITHUB_REPOSITORY from the environment to post its PR comment (AC-87..89);
+Reads GITHUB_REPOSITORY from the environment to post its PR comment;
 omit --pr-number or GITHUB_REPOSITORY to skip commenting (e.g. a local/manual run).
 
-See docs/functional/domain-pr-review-approval/README.md (AC-66..AC-73, AC-87..89) and
-docs/design/domain-pr-review-approval/adr-numbering/README.md for the full contract.
 """
 
 import glob
@@ -27,7 +25,7 @@ def find_duplicate_adr_numbers(filenames: list) -> dict:
     """Map each ADR number claimed by 2+ filenames to the list of colliding filenames.
 
     filenames not matching `NNNN-slug.md` are ignored. Returns {} when there are no
-    collisions. AC-66, AC-67, AC-71.
+    collisions.
     """
     by_number = {}
     for filename in filenames:
@@ -42,7 +40,7 @@ def find_dangling_adr_references(known_numbers: set, files: list) -> list:
     """Scan (path, contents) pairs for ADR-00NN / ADR 00NN citations not in known_numbers.
 
     Returns a list of {file, line, number} for every citation whose number has no
-    corresponding file. AC-68, AC-69, AC-71.
+    corresponding file.
     """
     findings = []
     for path, contents in files:
@@ -63,7 +61,7 @@ def _read_docs_tree() -> list:
 
 
 def _post_pr_comment(pr_number: str | None, repo: str | None, duplicates: dict, dangling: list) -> None:
-    """AC-87: post on every outcome."""
+    """Post on every outcome."""
     body = notify_render.render_adr_numbering_comment(duplicates, dangling)
     pr_comment.post_or_log(notify_render.ADR_NUMBERING_MARKER, body, pr_number, repo)
 

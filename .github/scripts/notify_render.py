@@ -132,6 +132,19 @@ def _section_sqlfluff(report) -> tuple[bool, str]:
     return False, _failed_section("SQLFluff", f"❌ {total} violation(s)", lines, "Per-file breakdown")
 
 
+_SQLFLUFF_STDERR_TAIL_LINES = 20
+
+
+def _section_sqlfluff_missing(stderr: str) -> str:
+    tail = "\n".join(stderr.strip().splitlines()[-_SQLFLUFF_STDERR_TAIL_LINES:])
+    return _failed_section(
+        "SQLFluff",
+        "❌ sqlfluff exited without writing a report",
+        f"```text\n{tail or '(sqlfluff wrote no error output)'}\n```",
+        f"sqlfluff error output (last {_SQLFLUFF_STDERR_TAIL_LINES} lines)",
+    )
+
+
 def _section_gitleaks(report) -> tuple[bool, str]:
     if report is None:
         return True, _passed_section("Gitleaks", "No secrets found")
@@ -357,18 +370,17 @@ def _render_shortcut_seeding(report: dict | None) -> str:
 
 
 def _ephemeral_database_line(result: dict) -> str:
-    """Render the per-PR database name, or "" when the producer supplied none (AC-10).
+    """Render the per-PR database name, or "" when the producer supplied none.
 
     The name is an **operator correlation handle only** — it ties a CI log line to a
     MotherDuck object. No interactive surface hangs off it: the database is reachable by
-    the CI service account alone (AC-93), so a Dive link or local dbt snippet would point
+    the CI service account alone, so a Dive link or local dbt snippet would point
     somewhere no reader can go.
 
     `db_name` is a MotherDuck-only key. This renderer is shared with the Fabric bundle,
     whose Gate 2 emits no such key — an ephemeral Fabric *workspace* is a different
     concept with a different lifecycle, and it must not borrow this wording. The
-    contract is enforced, not assumed: see the invariant in
-    tests/unit/domain_pr_review_approval/test_motherduck_no_share_or_dive.py.
+    contract is enforced by an invariant test, not assumed.
     """
     db_name = result.get("db_name")
     return f"\n_Ephemeral database: `{db_name}`_\n" if db_name else ""
@@ -383,7 +395,7 @@ def render_gate_2(result: dict | None) -> str:
     session_error = result.get("session_error")
     if overall == "error" or session_error:
         cause = session_error or result.get("error") or "Session error"
-        # AC-10: name the database here too when the crash happened after the clone —
+        # Name the database here too when the crash happened after the clone —
         # this is the path with a failure to investigate, so withholding the operator's
         # correlation handle would be worst exactly where it is most needed.
         db_line = _ephemeral_database_line(result)
@@ -469,6 +481,13 @@ def render_gate_4(result: dict | None) -> str:
     overall = result.get("overall_status", "")
     passed = overall == "pass"
 
+    if overall == "skipped":
+        return (
+            "## Data Tests (ci/data-tests) ⏭️ Skipped\n\n"
+            "No models are in scope for this PR (the modified-model closure is empty), "
+            "so no data tests ran.\n"
+        )
+
     session_error = result.get("session_error")
     if overall == "error" or session_error:
         cause = session_error or result.get("error") or "Session error"
@@ -550,7 +569,7 @@ def render_gate_5(result: dict | None) -> str:
 
     # Partition: errored artifacts (any non-null `error` field) are split out
     # from genuinely brand-new ones so failed prod-baseline lookups are visible
-    # rather than silently rendered as auto-passes (VD-2097).
+    # rather than silently rendered as auto-passes.
     errored = [a for a in artifacts if a.get("error")]
     brand_new = [a for a in artifacts if a.get("baseline") is None and not a.get("error")]
     existing = [a for a in artifacts if a.get("baseline") is not None and not a.get("error")]
@@ -1055,8 +1074,6 @@ GATE_3_MARKER = "<!-- ci-unit-tests -->"
 GATE_4_MARKER = "<!-- ci-data-tests -->"
 GATE_5_MARKER = "<!-- ci-data-diff -->"
 PREFLIGHT_MARKER = "<!-- ci-preflight -->"
-ORCHESTRATION_MARKER = "<!-- ci-orchestration -->"
-SEMANTIC_MODEL_MARKER = "<!-- ci-semantic-model -->"
 
 
 def render_gate_0_comment(
@@ -1068,10 +1085,13 @@ def render_gate_0_comment(
     gitleaks=None,
     scorecard=None,
     shortcut_seeding=None,
+    sqlfluff_stderr: str | None = None,
     run_url: str = "",
 ) -> str:
     has_gate_0 = bool(compile_result or schema_gate)
-    has_tools = any(x is not None for x in [ruff, sqlfluff, gitleaks, scorecard, shortcut_seeding])
+    has_tools = sqlfluff_stderr is not None or any(
+        x is not None for x in [ruff, sqlfluff, gitleaks, scorecard, shortcut_seeding]
+    )
 
     if not has_gate_0 and not has_tools:
         return f"{GATE_0_MARKER}\n## Static Analysis (ci/static-check) ⚠️\n\n_No data available._\n"
@@ -1084,6 +1104,10 @@ def render_gate_0_comment(
     for tool_id in _STATIC_ANALYSIS_TOOL_IDS:
         value = tool_inputs[tool_id]
         if value is None:
+            if tool_id == "sqlfluff" and sqlfluff_stderr is not None:
+                tool_passed_flags.append(False)
+                tool_table_rows += f"| {_TOOL_RENDERERS[tool_id].name} | {_icon(False)} Report missing — see workflow logs |\n"
+                tool_parts.append(_section_sqlfluff_missing(sqlfluff_stderr))
             continue
         cfg = _TOOL_RENDERERS[tool_id]
         tool_passed, tool_section = cfg.section_fn(value)
@@ -1125,7 +1149,7 @@ def render_gate_1_comment(
 ) -> str:
     """Render the ci/state-modified+ PR comment.
 
-    When `platform_error` is set (VD-1596 Phase 2 artifact-mode failure), the
+    When `platform_error` is set (artifact-mode failure), the
     body distinguishes a platform error from greenfield by carrying the
     Mode / Category / Reason triple plus a remediation footer that tells the
     operator to re-run the job or push a new commit. `platform_error` keys:
@@ -1143,15 +1167,38 @@ def render_gate_1_comment(
         mode = platform_error.get("mode", "artifact")
         category = platform_error.get("category", "")
         reason = platform_error.get("reason", "")
+
+        # version_mismatch/provenance_missing are not transport failures — the
+        # fetch succeeded, but the baseline fails a parity policy. "Re-run this job" is
+        # actively wrong advice here: a re-run reproduces the identical outcome, since
+        # nothing about the job's inputs changed. Each gets its own banner + remediation.
+        if category in ("version_mismatch", "provenance_missing"):
+            banner = (
+                "> ❌ **Version mismatch** — the baseline's recorded dbt/adapter version could not be installed.\n\n"
+                if category == "version_mismatch"
+                else "> ❌ **Baseline provenance missing** — the prod-state baseline predates dbt/adapter version recording and cannot be checked for parity.\n\n"
+            )
+            remediation = (
+                "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-running this job will "
+                "reproduce the same failure. Republish the baseline instead: trigger `publish-prod-manifest.yml` "
+                "(`workflow_dispatch`) on `main` to publish a baseline with freshly recorded dbt/adapter "
+                "provenance, then push a new commit or re-run this job.\n"
+            )
+        else:
+            banner = "> ❌ **Platform error** — fetching prod state failed.\n\n"
+            remediation = (
+                "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-run this job once the issue is "
+                "resolved, or push a new commit.\n"
+            )
+
         return (
             f"{GATE_1_MARKER}\n"
             f"{heading}\n\n"
-            f"> ❌ **Platform error** — fetching prod state failed.\n\n"
+            f"{banner}"
             f"- Mode: {mode}\n"
             f"- Category: {category}\n"
             f"- Reason: {reason}\n\n"
-            "ci/run, ci/unit-tests, ci/data-tests, and ci/data-diff did not run. Re-run this job once the issue is resolved, "
-            "or push a new commit.\n"
+            f"{remediation}"
         )
 
     if not passed and not closure:
@@ -1241,6 +1288,10 @@ def render_design_drift_comment(result: dict | None, modified_names: list[str] |
     if result is None:
         return f"{DESIGN_DRIFT_MARKER}\n## Design Drift (ci/design-drift) ⚠️\n\n_No data available._\n"
 
+    if result.get("skipped"):
+        return (f"{DESIGN_DRIFT_MARKER}\n## Design Drift (ci/design-drift) ⏭️ Skipped\n\n"
+                f"_no model design record changed — nothing to compare._\n")
+
     has_drift = result.get("has_drift", False)
     findings = result.get("findings") or []
 
@@ -1252,7 +1303,7 @@ def render_design_drift_comment(result: dict | None, modified_names: list[str] |
         section = (
             f"## Design Drift (ci/design-drift) ✅\n\n"
             f"{models_line}"
-            f"No drift detected — design.md matches the modified model set.\n"
+            f"No drift detected — the changed model design records match the modified model set.\n"
         )
     else:
         rows = "\n".join(
@@ -1267,42 +1318,6 @@ def render_design_drift_comment(result: dict | None, modified_names: list[str] |
         )
 
     return f"{DESIGN_DRIFT_MARKER}\n{section}"
-
-
-def render_contract_gate_comment(marker: str, title: str, context: str, result: dict | None) -> str:
-    """Render a C5 design-contract gate result ({skipped, findings:[{rule,severity,message}]}).
-
-    Reused by ci/orchestration and ci/semantic-model — the two design-contract gates
-    share the C5 protocol, so they share one renderer.
-    """
-    if result is None:
-        return f"{marker}\n## {title} ({context}) ⚠️\n\n_No data available._\n"
-
-    if result.get("skipped"):
-        return (
-            f"{marker}\n## {title} ({context}) ⏭️ Skipped\n\n"
-            f"No design-contract section declared in design.md — nothing to validate.\n"
-        )
-
-    findings = result.get("findings") or []
-    critical = [f for f in findings if f.get("severity") == "critical"]
-
-    if not critical:
-        body = f"{marker}\n## {title} ({context}) ✅\n\nDesign contract satisfied.\n"
-        advisory = [f for f in findings if f.get("severity") != "critical"]
-        if advisory:
-            lines = "\n".join(f"- `{f.get('rule', '')}` — {f.get('message', '')}" for f in advisory)
-            body += f"\n_Advisory:_\n{lines}\n"
-        return body
-
-    rows = "\n".join(
-        f"| {f.get('severity', '')} | {f.get('rule', '')} | {f.get('message', '')} |"
-        for f in findings
-    )
-    return (
-        f"{marker}\n## {title} ({context}) ❌\n\n"
-        f"| Severity | Rule | Detail |\n| --- | --- | --- |\n{rows}\n"
-    )
 
 
 def render_gate_4_comment(result) -> str:
@@ -1365,8 +1380,9 @@ def _preflight_remediation_footer(result: dict) -> str:
     intent = result.get("intent", {})
     if intent.get("status") == "fail":
         bullets.append(
-            "- **intent:** Slug must match `intent/vd-<linear-number>-<kebab-summary>`, "
-            "e.g. `intent/vd-2062-gate3-v2`. Rename the branch and push."
+            "- **intent:** The branch name must be `intent/<slug>`. The slug uses only lowercase "
+            "letters, digits and hyphens, and starts with a letter or a digit (for example, "
+            "`intent/orders-daily-refresh`). Rename the branch and push."
         )
 
     ci = result.get("ci_config", {})
@@ -1404,6 +1420,7 @@ def render_preflight_comment(result: dict | None) -> str:
     """Render the <!-- ci-preflight --> upserted PR comment section.
 
     Rows always shown: auto-rebase (informational), intent, ci-config.
+    Capacity row added when the report carries one (Fabric lanes).
     Violation row added only when auto_merge_disabled check failed.
     """
     if not result:
@@ -1438,6 +1455,12 @@ def render_preflight_comment(result: dict | None) -> str:
             ci_detail = f"{ci_detail} — missing: {formatted}"
 
     rows.append(f"| ci-config | {ci_icon} | {ci_detail} |")
+
+    # Fabric lanes only: absent on platforms with no capacity to check.
+    capacity = result.get("capacity")
+    if capacity:
+        capacity_icon = "✅" if capacity.get("passed") else "❌"
+        rows.append(f"| capacity | {capacity_icon} | {_sanitize_table_cell(capacity.get('message', ''))} |")
 
     # Violation row: only shown when auto-merge is enabled (failure case)
     am = result.get("auto_merge_disabled", {})
@@ -1559,8 +1582,8 @@ ADR_NUMBERING_MARKER = "<!-- ci-adr-numbering -->"
 
 
 def render_adr_numbering_comment(duplicates: dict, dangling: list) -> str:
-    """AC-87: own marker, upserted every run. AC-88: findings under distinct
-    headings. AC-89: all-clear (including the no-ADR-files short-circuit,
+    """Own marker, upserted every run. Findings under distinct
+    headings. All-clear (including the no-ADR-files short-circuit,
     which passes empty duplicates/dangling here same as a clean, populated run)."""
     if not duplicates and not dangling:
         return (

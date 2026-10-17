@@ -36,6 +36,7 @@ except ImportError:
 
 import emit_status
 import runner_io
+from gate4_scope import Run, decide_gate4_scope, scope_outcome
 from parse_run_results import check_store_failures_config, enrich_tests_from_manifest, parse_data_test_results
 
 CONTEXT = "ci/data-tests"
@@ -75,17 +76,12 @@ def _load_dbt_project(path: str) -> dict:
         return {}
 
 
-def _select_names(deployment_manifest_path: str) -> list[str]:
+def _read_text(path: str) -> str | None:
     try:
-        with open(deployment_manifest_path) as f:
-            dm = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return []
-    names = []
-    for a in dm.get("artifacts") or []:
-        full = a.get("name", "")
-        names.append(full.split(".")[-1] if "." in full else full)
-    return [n for n in names if n]
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def cmd_run_gate(args) -> int:
@@ -101,6 +97,17 @@ def cmd_run_gate(args) -> int:
         )
 
     _post(args.head_sha, "pending", "Gate 4: dbt test --store-failures running")
+
+    scope = decide_gate4_scope(_read_text(args.deployment_manifest), exclude_ephemeral=False)
+    if not isinstance(scope, Run):
+        state, desc, report = scope_outcome(scope, args.head_sha)
+        if args.output:
+            pathlib.Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+            with open(args.output, "w") as f:
+                json.dump(report, f, indent=2)
+        _post(args.head_sha, state, desc)
+        print(f"Gate 4 scope: {desc}", flush=True)
+        return 0 if state == "success" else 1
 
     env = {
         **os.environ,
@@ -125,9 +132,7 @@ def cmd_run_gate(args) -> int:
         "--target", TARGET,
         "--exclude", "test_type:unit",
     ]
-    names = _select_names(args.deployment_manifest)
-    if names:
-        cmd.extend(["--select", " ".join(names)])
+    cmd.extend(["--select", " ".join(scope.names)])
 
     subprocess.run(cmd, env=env, capture_output=True, text=True)
     # We intentionally do not exit on dbt's non-zero return code: run_results.json is

@@ -7,13 +7,13 @@ assets to it. No I/O — the caller resolves release-existence (e.g. via
 
 The tag is named for the dbt Docs site because that was its first payload; it is a
 fixed, clobbered address rather than a version, and the prod-state manifests share it
-(VD-4418) rather than minting a second release.
+rather than minting a second release.
 
 RELEASE_TAG and the asset-name constants are exported so the caller's own existence-check
 and download commands target the same literals this module publishes to, instead of
 duplicating the strings.
 
-Also carries the AC-14..AC-18 command builders for the immutable per-build release
+Also carries the command builders for the immutable per-build release
 (`dbt-manifest-<sha>`): `build_manifest_release_commands` (create/upload/repair/reject by
 release state) and `build_prune_commands` (count-based retention). Extending this module
 rather than adding a second one follows CLAUDE.md's module-reuse rule — this file already
@@ -44,14 +44,14 @@ SELECTION_MANIFEST_ASSET = "manifest.json"
 # its single `manifest.json` serves both roles and it publishes only the selection name.
 DEFER_MANIFEST_ASSET = "manifest_prod.json"
 
-# ADR-0027/D-12 provenance asset, published to both the per-build and `dbt-docs-latest` releases.
+# Provenance asset, published to both the per-build and `dbt-docs-latest` releases.
 PROVENANCE_ASSET = "manifest-source.json"
 
 MANIFEST_RELEASE_TAG_PREFIX = "dbt-manifest-"
 
 
 class ManifestReleaseMismatchError(Exception):
-    """Raised when an existing per-build release's assets differ from this run's (AC-18)."""
+    """Raised when an existing per-build release's assets differ from this run's."""
 
 
 def manifest_release_tag(sha: str) -> str:
@@ -82,6 +82,10 @@ def classify_release_state(
     alongside `build_manifest_release_commands` rather than inline branching in the shell
     that gathers `missing`/`differing` — CLAUDE.md's functional-core rule.
     """
+    assert set(missing) <= set(expected_assets), (
+        "missing must be a subset of expected_assets -- the shell can only report an asset "
+        "as missing if it was one this run expected to publish"
+    )
     if not release_exists:
         return "absent"
     if not differing:
@@ -94,7 +98,7 @@ def classify_release_state(
 def build_manifest_release_commands(
     release_state: str, sha: str, assets_to_upload: list[str]
 ) -> list[list[str]]:
-    """Return the gh command sequence for the immutable per-build release (AC-14, AC-18).
+    """Return the gh command sequence for the immutable per-build release.
 
     `release_state` is a pre-gathered scalar — one of the four states the shell computes by
     comparing this run's assets against an existing `dbt-manifest-<sha>` release, if any:
@@ -102,7 +106,7 @@ def build_manifest_release_commands(
     - `"absent"`: no such release exists yet. Create it (`--target` pins it to the exact
       build commit, matching D-11's "immutable by construction") and upload every asset.
     - `"complete_match"`: the release exists and already carries every expected asset with
-      matching content. No-op — re-publishing the same commit must not error (AC-18).
+      matching content. No-op — re-publishing the same commit must not error.
     - `"incomplete"`: the release exists but a prior run left it partial (e.g. created, then
       failed mid-upload). Repair it by uploading only the assets the shell found missing or
       differing, rather than treating a resumable failure as a hard mismatch.
@@ -139,7 +143,7 @@ def build_prune_commands(
     gathered (via a single `--limit 1000` call well past the CLI's default page size) — this function never
     re-queries GitHub. Sorted by `(created_at, tag)` descending: creation time orders newest
     first, and the tag breaks ties deterministically when two releases share a timestamp
-    (AC-16). The newest `keep` are retained; everything older is deleted along with its tag.
+    The newest `keep` are retained; everything older is deleted along with its tag.
     """
     ordered = sorted(existing_releases, key=lambda r: (r[1], r[0]), reverse=True)
     to_prune = list(reversed(ordered[keep:]))
@@ -156,7 +160,7 @@ def build_release_publish_commands(
     exists, only the clobber-upload command runs.
 
     `asset_names` defaults to the dbt Docs site alone. The prod-state manifests ride
-    this same release (VD-4418): they are repository *contents*, which the brokered
+    this same release: they are repository *contents*, which the brokered
     agent GitHub token can read, whereas an Actions artifact needs Actions read and is
     therefore unreachable from an Intent. All assets go in one `upload` invocation --
     `gh` accepts several, and one command keeps the publish atomic per run.
