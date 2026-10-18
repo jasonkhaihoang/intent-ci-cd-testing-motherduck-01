@@ -16,3 +16,4 @@ renamed as (
 
 select * from renamed
 -- VD-5799 validation bump
+-- VD-6962 validation bump
