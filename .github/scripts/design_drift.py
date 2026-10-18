@@ -1,7 +1,7 @@
 """Deep module for ci/design-drift.
 
 Public thin interfaces:
-    build_llm_prompt(design_text, manifest, modified_names) -> str
+    build_llm_prompt(design_text, manifest, record_artifacts) -> str
     parse_llm_content(content) -> dict | None
     artifact_findings(record_artifacts, project_model_names) -> list[dict]
     run_design_drift(design_text, manifest, modified_names, llm_content,
@@ -15,7 +15,8 @@ Returns:
     {"has_drift": bool, "findings": [{"kind": str, "model": str, "detail": str}, ...]}
 
 Finding kinds:
-    missing_model, grain_mismatch, decision_violated, malformed_llm_response.
+    missing_model (deterministic, from artifact_findings only — never the LLM),
+    grain_mismatch, decision_violated, malformed_llm_response.
 
 Malformed LLM responses produce a deterministic single-finding result of
 kind="malformed_llm_response" — the function never raises.
@@ -31,7 +32,8 @@ import json
 
 from dbt_manifest import Manifest
 
-_VALID_KINDS = {"missing_model", "grain_mismatch", "decision_violated"}
+# missing_model is decided only by artifact_findings; the LLM may return the other two.
+_LLM_KINDS = {"grain_mismatch", "decision_violated"}
 
 
 def artifact_findings(record_artifacts: set[str], project_model_names: set[str]) -> list[dict]:
@@ -122,18 +124,18 @@ def _compact_node(node: dict) -> dict:
     return result
 
 
-def build_llm_prompt(design_text: str, manifest: dict, modified_names: list[str]) -> str:
-    modified_set = set(modified_names)
+def build_llm_prompt(design_text: str, manifest: dict, record_artifacts: list[str]) -> str:
+    recorded = set(record_artifacts)
     compact = {
         v.get("name", k): _compact_node(v)
         for k, v in manifest.get("nodes", {}).items()
-        if v.get("name") in modified_set
+        if v.get("name") in recorded
     }
-    kind_enum = ", ".join(sorted(_VALID_KINDS))
+    kind_enum = ", ".join(sorted(_LLM_KINDS))
     return (
         "You are a CI gate. The design records below are the durable model design records this "
         "PR changed (frontmatter artifacts, ## Grain, and append-only D-NN decisions). Compare "
-        "them against the dbt manifest fragment for the state:modified models. Report a "
+        "them against the dbt manifest fragment for the models those records name. Report a "
         "grain_mismatch when a model's grain differs from its record's Grain, and a "
         "decision_violated (cite the D-NN in detail) when compiled SQL or config contradicts a "
         "recorded decision. Do not report anything a record does not state.\n\n"
@@ -144,8 +146,7 @@ def build_llm_prompt(design_text: str, manifest: dict, modified_names: list[str]
         f"Valid values for \"kind\" are exactly: {kind_enum}.\n"
         "If there is no drift, respond with has_drift=false and an empty findings array.\n\n"
         f"=== design records ===\n{design_text}\n\n"
-        f"=== state:modified ===\n{json.dumps(sorted(modified_set))}\n\n"
-        f"=== manifest (modified nodes only) ===\n{json.dumps(compact, indent=2)}\n"
+        f"=== manifest (models the records name) ===\n{json.dumps(compact, indent=2)}\n"
     )
 
 
@@ -164,7 +165,7 @@ def _validate_llm_response(llm_response: dict) -> dict | None:
             return None
         if not {"kind", "model", "detail"} <= f.keys():
             return None
-        if f["kind"] not in _VALID_KINDS:
+        if f["kind"] not in _LLM_KINDS:
             return None
     return llm_response
 
