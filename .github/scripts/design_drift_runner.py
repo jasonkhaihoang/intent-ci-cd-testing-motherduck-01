@@ -161,7 +161,7 @@ def main(argv: list[str]) -> int:
         api_key = os.environ["LLM_API_KEY"]
         api_url = os.environ.get("LLM_API_URL") or DEFAULT_LLM_API_URL
         model = os.environ.get("LLM_MODEL") or DEFAULT_LLM_MODEL
-        prompt = build_llm_prompt(design_text, manifest, sorted(set(modified_names) | record_artifacts))
+        prompt = build_llm_prompt(design_text, manifest, sorted(record_artifacts))
         llm_content = call_llm(api_key, prompt, api_url, model)
     except Exception as e:  # gather/call failure → emit failure status, exit 1
         # Print before posting: a failed status post must not replace the original diagnostic.

@@ -7,8 +7,6 @@
 # install together on every site's Python: run `npm run check:runtime-resolve` from
 # tests/evals after any edit. A platform that needs a different version of a package
 # already listed here carries that one line in overrides/<platform>.txt.
-#
-# Design: docs/design/runtime-versions/README.md
 
 # Engines and adapters.
 dbt-core==1.12.5
@@ -19,7 +17,7 @@ dbt-redshift==1.11.1
 dbt-bigquery==1.12.1
 dlt==1.30.0
 
-# SQLFluff lint toolchain: domain-cicd's Gate 0 (ci/static-check) and the Domain pre-commit hook /install-ci installs (VD-6502)
+# SQLFluff lint toolchain: the CI bundle's Gate 0 (ci/static-check) and the Domain pre-commit hook /install-ci installs
 sqlfluff==4.4.0
 sqlfluff-templater-dbt==4.4.0
 
@@ -40,19 +38,19 @@ snowflake-connector-python==4.8.0
 
 # Our units.
 vibedata-dbt-fabric-notebook==0.2.1
-vibedata-dlt-core==0.6.0
+vibedata-dlt-core==0.8.0
 vibedata-dlt-fabric-notebook==0.10.0
 vibedata-dlt-fabric-studio==0.18.1
 vibedata-dlt-fabric-warehouse-studio==0.5.0
 vibedata-dlt-duckdb-core==0.3.0
-vibedata-dlt-duckdb-studio==0.11.0
+vibedata-dlt-duckdb-studio==0.12.0
 vibedata-motherduck-flight==0.1.0
-vibedata-dlt-studio-secrets==0.2.0
+vibedata-dlt-studio-secrets==0.3.0
 vibedata-studio-azure-cred-broker==0.1.4
 
 # A floor rather than a pin, so a later release reaches the next image build and Domain
 # CI install without an edit here. 0.2.0 is the first release that logs in as the user
-# the Broker's `database_password` answer names rather than the projected one (VD-6189).
+# the Broker's `database_password` answer names rather than the projected one.
 vibedata-dlt-redshift-studio>=0.2.0
 
 # MotherDuck refuses a client older than this. The agent image still installs the exact
