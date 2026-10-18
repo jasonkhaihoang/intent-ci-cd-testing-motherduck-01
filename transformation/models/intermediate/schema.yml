@@ -1,0 +1,7 @@
+version: 2
+
+models:
+  - name: int_sales_valid
+    description: Sales with a positive quantity (VD-6962 downstream-chain fixture).
+    meta:
+      owner: "@jasonkhaihoang"

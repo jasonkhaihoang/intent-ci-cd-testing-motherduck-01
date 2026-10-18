@@ -1,0 +1,11 @@
+version: 2
+
+models:
+  - name: fct_sales_daily
+    description: Revenue per sale date and region (VD-6962 downstream-chain fixture).
+    meta:
+      owner: "@jasonkhaihoang"
+  - name: fct_sales_summary
+    description: Revenue per region (VD-6962 downstream-chain fixture).
+    meta:
+      owner: "@jasonkhaihoang"
